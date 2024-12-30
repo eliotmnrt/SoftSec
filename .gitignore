@@ -2,8 +2,8 @@
 *.d
 
 # 
-.idea
-.vs
+.idea/*
+.vs/*
 
 # Object files
 *.o
