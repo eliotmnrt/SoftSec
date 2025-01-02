@@ -163,6 +163,27 @@ char* base64_encode(const unsigned char* input, int length) {
 }
 
 
+void hash_password(const char* password, char* hash_output) {
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len;
+    
+    EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(md_ctx, EVP_sha256(), NULL);
+    EVP_DigestUpdate(md_ctx, password, strlen(password));
+    EVP_DigestFinal_ex(md_ctx, hash, &hash_len);
+    EVP_MD_CTX_free(md_ctx);
+
+    // Convertir le hash en chaîne hexadécimale
+    for (unsigned int i = 0; i < hash_len; i++) {
+        sprintf(&hash_output[i * 2], "%02x", hash[i]);
+    }
+}
+
+
+
+
+
+
 void send_command(const char* command, const char* payload, int port) {
     char buffer[MAX_BUFFER];
 
@@ -205,9 +226,17 @@ int main(int argc, char* argv[]) {
     } else if (strcmp(argv[1], "-down") == 0  && argv[2]) {
         send_command("DOWNLOAD", argv[2], port);
     } else if (strcmp(argv[1], "-register") == 0 && argv[3]) {
-        send_command("REGISTER", strcat(argv[2], argv[3]), port);
+        char hashed_password[65];
+        hash_password(argv[3], hashed_password);
+        char logs[56];
+        snprintf(logs, sizeof(logs), "%s %s", argv[2], hashed_password);
+        send_command("REGISTER", logs, port);
     } else if (strcmp(argv[1], "-login") == 0 && argv[3]) {
-        send_command("LOGIN", strcat(argv[2], argv[3]), port);
+        char hashed_password[65];
+        hash_password(argv[3], hashed_password);
+        char logs[56];
+        snprintf(logs, sizeof(logs), "%s %s", argv[2], hashed_password);
+        send_command("LOGIN", logs, port);
     } else {
         fprintf(stderr, "Option invalide : %s\n", argv[1]);
         return 1;

@@ -12,30 +12,31 @@
 #define MAX_BUFFER 1024
 #define AUTH_TOKEN "secure_token" // Jeton d'authentification 
 
-int authenticate_client(const char* token) {
+/* int authenticate_client(const char* token) {
     return (strcmp(token, AUTH_TOKEN) == 0);
+} */
+
+int authenticate_user(const char* username, const char* hashed_password, const char * fileName) {
+
+    FILE* file = fopen(fileName, "r");
+    if (!file) {
+        perror("Erreur lors de l'ouverture du fichier utilisateur\n");
+        return 0; // Impossible de lire le fichier
+    }
+
+    char file_username[256], file_hashed_password[256];
+    // Lire le fichier ligne par ligne
+    while (fscanf(file, "%s %s", file_username, file_hashed_password) == 2) {
+        if (strcmp(file_username, username) == 0 && strcmp(file_hashed_password, hashed_password) == 0) {
+            fclose(file);
+            return 1; // Utilisateur authentifié
+        }
+    }
+
+    fclose(file);
+    return 0; // Échec de l'authentification
 }
 
-void handle_client_command(const char* command, const char* payload) {
-    if (strcmp(command, "UPLOAD") == 0) {
-        printf("Commande UPLOAD reçue. Traitement du fichier %s\n", payload);
-        // a implémenter 
-    } else if (strcmp(command, "LIST") == 0) {
-        printf("Commande LIST reçue. Envoi de la liste des fichiers.\n");
-        // a implémenter 
-    } else if (strcmp(command, "DOWNLOAD") == 0) {
-        printf("Commande DOWNLOAD reçue. Envoi du fichier %s\n", payload);
-        // a implémenter 
-    } else if (strcmp(command, "REGISTER") == 0) {
-        printf("Commande REGISTER reçue. enregistement des données %s\n", payload);
-        // a implémenter 
-    } else if (strcmp(command, "LOGIN") == 0) {
-        printf("Commande LOGIN reçue. Login success %s\n", payload);
-        // a implémenter 
-    }else {
-        printf("Commande non reconnue : %s\n", command);
-    }
-}
 
 unsigned char* base64_decode(const char* input) {
     BIO *bio, *b64;
@@ -112,6 +113,66 @@ int verify_signature(const char* message, const char* signature, size_t sig_len,
     return result == 1; // Retourne 1 si la signature est valide
 }
 
+void handle_login_command(const char* buffer, char * fileNameLogin) {
+    char username[256], hashedPassword[256];
+    if (sscanf(buffer, "%s %s", username, hashedPassword) != 2) {
+        printf("ERROR: Invalid login format\n");
+        return;
+    }
+
+    if (authenticate_user(username, hashedPassword, fileNameLogin)) {
+        printf("SUCCESS: Login successful\n");
+    } else {
+        printf("ERROR: Invalid credentials\n");
+    }
+}
+
+
+void handle_register_command(const char* buffer, char * fileNameLogin) {
+    char username[256], hashedPassword[256];
+    if (sscanf(buffer, "%s %s", username, hashedPassword) != 2) {
+        printf("ERROR: Invalid login format\n");
+        exit(1);
+    }
+
+    FILE* file = fopen(fileNameLogin, "a");
+    if (!file) {
+        perror("Erreur lors de l'ouverture du fichier utilisateur\n");
+        fclose(file);
+        exit(1);
+    }
+    
+    if (fprintf(file, "%s %s\n", username, hashedPassword) < 0) {
+        perror("Erreur lors de l'écriture dans le fichier");
+        fclose(file);
+        exit(1);
+    }
+
+    fclose(file); // Fermer le fichier
+    
+}
+
+void handle_client_command(const char* command, const char* payload) {
+    if (strcmp(command, "UPLOAD") == 0) {
+        printf("Commande UPLOAD reçue. Traitement du fichier %s\n", payload);
+        // a implémenter 
+    } else if (strcmp(command, "LIST") == 0) {
+        printf("Commande LIST reçue. Envoi de la liste des fichiers.\n");
+        // a implémenter 
+    } else if (strcmp(command, "DOWNLOAD") == 0) {
+        printf("Commande DOWNLOAD reçue. Envoi du fichier %s\n", payload);
+        // a implémenter 
+    } else if (strcmp(command, "REGISTER") == 0) {
+        printf("Commande REGISTER reçue.%s\n", payload);
+        handle_register_command(payload, "login.txt");
+        // a implémenter 
+    } else if (strcmp(command, "LOGIN") == 0) {
+        printf("Commande LOGIN reçue. %s\n", payload);
+        handle_login_command(payload, "login.txt");
+    }else {
+        printf("Commande non reconnue : %s\n", command);
+    }
+}
 
 int main() {
     int port = 12345;
