@@ -170,6 +170,63 @@ void handle_upload_command(const char* payload) {
     printf("SUCCESS: Fichier '%s' téléchargé avec succès (%zu octets)\n", filename, content_length);
 }
 
+
+void handle_download_command(const char* filename) {
+    char filepath[512] = "./files/test/"; // Dossier contenant les fichiers
+    strcat(filepath, filename);      // Chemin complet du fichier
+
+    // Vérification du nom du fichier (évite les attaques par parcours de répertoires)
+    if (strstr(filename, "../") || strchr(filename, '/') || strchr(filename, '\\')) {
+        printf("ERROR: Nom de fichier invalide : %s\n", filename);
+        return;
+    }
+
+    // Ouvrir le fichier en mode lecture
+    FILE* file = fopen(filepath, "rb");
+    if (!file) {
+        perror("ERROR: Impossible d'ouvrir le fichier");
+        return;
+    }
+
+    // Obtenir la taille du fichier
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    rewind(file);
+
+    // Vérifier si le fichier est trop volumineux
+    if (file_size > MAX_FILE_SIZE) {
+        printf("ERROR: Fichier trop volumineux (%ld octets)\n", file_size);
+        fclose(file);
+        return;
+    }
+
+    // Lire le contenu du fichier
+    char* file_content = (char*)malloc(file_size + 1);
+    if (!file_content) {
+        printf("ERROR: Mémoire insuffisante\n");
+        fclose(file);
+        return;
+    }
+
+    size_t bytes_read = fread(file_content, 1, file_size, file);
+    if (bytes_read != file_size) {
+        printf("ERROR: Erreur lors de la lecture du fichier\n");
+        free(file_content);
+        fclose(file);
+        return;
+    }
+    file_content[file_size] = '\0'; // Null-terminate le contenu
+
+    fclose(file);
+
+    // Envoyer le contenu au client (simulé ici avec un affichage)
+    printf("SUCCESS: Fichier '%s' téléchargé (%ld octets)\n", filename, file_size);
+    printf("Contenu du fichier :\n%s\n", file_content);
+
+    free(file_content);
+}
+
+
 void handle_login_command(const char* buffer, char * fileNameLogin) {
     char username[256], hashedPassword[256];
     if (sscanf(buffer, "%s %s", username, hashedPassword) != 2) {
@@ -229,17 +286,17 @@ void handle_client_command(const char* command, const char* payload) {
         printf("Commande UPLOAD reçue. \n");
         // necessite que le client soit enregistré auparavant
         handle_upload_command(payload);
-        // a implémenter 
     } else if (strcmp(command, "LIST") == 0) {
         printf("Commande LIST reçue. Envoi de la liste des fichiers.\n");
         // a implémenter 
     } else if (strcmp(command, "DOWNLOAD") == 0) {
         printf("Commande DOWNLOAD reçue. Envoi du fichier %s\n", payload);
         // a implémenter 
+        handle_download_command(payload);
     } else if (strcmp(command, "REGISTER") == 0) {
         printf("Commande REGISTER reçue.%s\n", payload);
         handle_register_command(payload, "login.txt");
-        // a implémenter 
+        
     } else if (strcmp(command, "LOGIN") == 0) {
         printf("Commande LOGIN reçue. %s\n", payload);
         handle_login_command(payload, "login.txt");
