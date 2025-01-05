@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
 #include <unistd.h>
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
@@ -113,6 +117,59 @@ int verify_signature(const char* message, const char* signature, size_t sig_len,
     return result == 1; // Retourne 1 si la signature est valide
 }
 
+
+#define MAX_FILE_SIZE (900)
+
+// Fonction pour vérifier le nom du fichier
+
+
+void handle_upload_command(const char* payload) {
+    char filename[256];
+    const char* file_content = strchr(payload, ' '); // Trouve le séparateur
+    if (!file_content) {
+        printf("ERROR: Format de payload invalide pour UPLOAD\n");
+        return;
+    }
+    size_t filename_length = file_content - payload;
+    if (filename_length >= sizeof(filename)) {
+        printf("ERROR: Nom de fichier trop long\n");
+        return;
+    }
+    strncpy(filename, payload, filename_length);
+    filename[filename_length] = '\0'; // Null-terminate le nom du fichier
+    // Vérification de sécurité sur le nom du fichier
+
+
+    file_content++; // Avance pour pointer après l'espace
+    size_t content_length = strlen(file_content);
+
+    // Vérification de la taille du fichier
+    if (content_length > MAX_FILE_SIZE) {
+        printf("ERROR: Fichier trop volumineux (%zu octets)\n", content_length);
+        return;
+    }
+    // Optionnel : Vérifier le type de contenu (si attendu comme texte ou binaire)
+    // Exemple : Rejet si fichier contient des caractères non-ASCII
+    for (size_t i = 0; i < content_length; i++) {
+        if (file_content[i] < 32 && file_content[i] != '\n' && file_content[i] != '\r' && file_content[i] != '\t') {
+            printf("ERROR: Contenu du fichier non valide (caractère binaire détecté)\n");
+        }
+    }
+    
+    // Écriture du fichier sur le serveur
+    char path[512];
+    snprintf(path, sizeof(path), "./files/test/%s", filename);
+    FILE* file = fopen(path, "w");
+    if (!file) {
+        perror("ERROR: Impossible de créer le fichier sur le serveur");
+        return;
+    }
+    fwrite(file_content, 1, content_length, file);
+    fclose(file);
+
+    printf("SUCCESS: Fichier '%s' téléchargé avec succès (%zu octets)\n", filename, content_length);
+}
+
 void handle_login_command(const char* buffer, char * fileNameLogin) {
     char username[256], hashedPassword[256];
     if (sscanf(buffer, "%s %s", username, hashedPassword) != 2) {
@@ -148,13 +205,30 @@ void handle_register_command(const char* buffer, char * fileNameLogin) {
         exit(1);
     }
 
-    fclose(file); // Fermer le fichier
-    
+    fclose(file);
+
+    //ajout de du repertoire du client
+    char dir[512];
+    snprintf(dir, sizeof(dir), "./files/%s", username);
+
+    if (mkdir(dir, 0700) == 0) {
+        printf("Répertoire client créé avec succès : %s\n", dir);
+    } else {
+        // Gérer les erreurs
+        if (errno == EEXIST) {
+            printf("Le répertoire client existe déjà : %s\n", dir);
+        } else {
+            perror("Erreur lors de la création du répertoire client");
+        }
+    }
+
 }
 
 void handle_client_command(const char* command, const char* payload) {
     if (strcmp(command, "UPLOAD") == 0) {
-        printf("Commande UPLOAD reçue. Traitement du fichier %s\n", payload);
+        printf("Commande UPLOAD reçue. \n");
+        // necessite que le client soit enregistré auparavant
+        handle_upload_command(payload);
         // a implémenter 
     } else if (strcmp(command, "LIST") == 0) {
         printf("Commande LIST reçue. Envoi de la liste des fichiers.\n");
@@ -218,17 +292,17 @@ int main() {
             printf("Signature : %s\n", encoded_signature);
             printf("Taille de la signature : %d\n", sig_len);
             printf("Payload : %s\n", payload);
-
+            
             /* if (!authenticate_client(token)) {
                 printf("Erreur : client non authentifié.\n");
                 continue;
             } */
-           char* decoded_signature = base64_decode(encoded_signature);
-           if (verify_signature(payload, (const char *) decoded_signature, sig_len, "public_key.pem") != 1)
-           {
+            char* decoded_signature = base64_decode(encoded_signature);
+            if (verify_signature(payload, (const char *) decoded_signature, sig_len, "public_key.pem") != 1)
+            {
                 fprintf(stderr, "Erreur lors de la verification de la signature du message.\n");
                 return 1;
-           }
+            }
             handle_client_command(command, payload);
         } else {
             printf("Aucun message reçu.\n");

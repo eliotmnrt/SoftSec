@@ -179,12 +179,98 @@ void hash_password(const char* password, char* hash_output) {
     }
 }
 
+#define MAX_FILE_SIZE (900)
+
+// Fonction pour charger le contenu d'un fichier dans un buffer
+char* load_file(const char* filename, size_t* file_size) {
+    FILE* file = fopen(filename, "rb");
+    if (!file) {
+        perror("ERROR: Impossible d'ouvrir le fichier");
+        return NULL;
+    }
+
+    // Aller à la fin pour déterminer la taille
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    rewind(file);
+
+    if (size < 0 || size > MAX_FILE_SIZE) {
+        printf("ERROR: Taille de fichier invalide (%ld octets)\n", size);
+        fclose(file);
+        return NULL;
+    }
+
+    char* buffer = (char*)malloc(size + 1); // +1 pour le caractère nul
+    if (!buffer) {
+        perror("ERROR: Allocation mémoire échouée");
+        fclose(file);
+        return NULL;
+    }
+
+    fread(buffer, 1, size, file);
+    buffer[size] = '\0'; // Null-terminate pour les chaînes
+    fclose(file);
+
+    if (file_size) {
+        *file_size = (size_t)size;
+    }
+    
+    return buffer;
+}
+
+
+char* prepare_payload(const char* filename) {
+    size_t file_size;
+    char* file_content = load_file(filename, &file_size);
+    printf("\n\nfile %s\n", file_content);
+    if (!file_content) {
+        return NULL;
+    }
+
+    // Allouer suffisamment d'espace pour le payload
+    size_t payload_size = strlen(filename) + 1 + file_size + 2;
+    char* payload = (char*)malloc(payload_size);
+    if (!payload) {
+        perror("ERROR: Allocation mémoire échouée pour le payload");
+        free(file_content);
+        return NULL;
+    }
+
+    // Construire le payload : <filename> <file_content>
+    snprintf(payload, payload_size, "%s %s", filename, file_content);
+    printf("\n\nfile %s\n", payload);
+    free(file_content);
+
+    return payload;
+}
+
+void handle_upload_command(const char* command, char* filename, int port){
+    char buffer[MAX_BUFFER];
+
+    unsigned char signature[256];
+    unsigned int sig_len;
+
+    char * payload = prepare_payload(filename);
+
+    // Signature du message
+    if (!sign_message(payload, "private_key.pem", signature, &sig_len)) {
+        fprintf(stderr, "Erreur lors de la signature du message.\n");
+    }
+    char* encoded_signature = base64_encode(signature, sig_len);
+    printf("signature %s\n", encoded_signature);
+    printf("Message : %s\n", payload);
+    snprintf(buffer, MAX_BUFFER, "%s %s %d %s", command, encoded_signature, sig_len, payload);
+
+    if (sndmsg(buffer, port) == 0) {
+        printf("Commande envoyée : %s\n", buffer);
+    } else {
+        fprintf(stderr, "Erreur : échec de l'envoi de la commande.\n");
+    }
+}
 
 
 
-
-
-void send_command(const char* command, const char* payload, int port) {
+void send_command(const char* command, char* payload, int port) {
     char buffer[MAX_BUFFER];
 
     unsigned char signature[256];
@@ -220,7 +306,7 @@ int main(int argc, char* argv[]) {
     int port = 12345;
 
     if (strcmp(argv[1], "-up") == 0 && argv[2]) {
-        send_command("UPLOAD", argv[2], port);
+        handle_upload_command("UPLOAD", argv[2], port);
     } else if (strcmp(argv[1], "-list") == 0) {
         send_command("LIST", "", port);
     } else if (strcmp(argv[1], "-down") == 0  && argv[2]) {
