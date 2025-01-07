@@ -8,6 +8,7 @@
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
+#include <dirent.h>
 
 #define MAX_BUFFER 1024
 #define AUTH_TOKEN "secure_token" // Jeton d'authentification 
@@ -152,12 +153,43 @@ void handle_register_command(const char* buffer, char * fileNameLogin) {
     
 }
 
+void handle_list_command() {
+
+    const char* directory_name = "files";
+    printf("directory_name %s\n", directory_name);
+    struct dirent* entry; // Structure pour représenter une entrée de répertoire
+
+    // Ouvre le répertoire
+    DIR* dir = opendir(directory_name);
+    if (dir == NULL) {
+        perror("Erreur lors de l'ouverture du répertoire files");
+        return;
+    }
+
+    printf("Contenu du répertoire '%s' :\n", directory_name);
+
+    // Parcourt chaque entrée du répertoire
+    while ((entry = readdir(dir)) != NULL) {
+        // Ignore les entrées spéciales "." et ".."
+        if (entry->d_name[0] == '.' && 
+           (entry->d_name[1] == '\0' || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
+            continue;
+        }
+
+        printf("- %s\n", entry->d_name); // Affiche le nom du fichier ou du dossier
+    }
+
+    closedir(dir); // Ferme le répertoire
+
+}
+
 void handle_client_command(const char* command, const char* payload) {
     if (strcmp(command, "UPLOAD") == 0) {
         printf("Commande UPLOAD reçue. Traitement du fichier %s\n", payload);
         // a implémenter 
     } else if (strcmp(command, "LIST") == 0) {
         printf("Commande LIST reçue. Envoi de la liste des fichiers.\n");
+        handle_list_command();
         // a implémenter 
     } else if (strcmp(command, "DOWNLOAD") == 0) {
         printf("Commande DOWNLOAD reçue. Envoi du fichier %s\n", payload);
