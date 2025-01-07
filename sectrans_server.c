@@ -153,10 +153,12 @@ void handle_register_command(const char* buffer, char * fileNameLogin) {
     
 }
 
-void handle_list_command() {
+void handle_list_command(const char * username) {
+    char directory_name[1024];
+    snprintf(directory_name, sizeof(directory_name), "files/%s", username);
 
-    const char* directory_name = "files";
-    printf("directory_name %s\n", directory_name);
+    printf("directory_name: %s\n", directory_name);
+
     struct dirent* entry; // Structure pour représenter une entrée de répertoire
 
     // Ouvre le répertoire
@@ -188,8 +190,8 @@ void handle_client_command(const char* command, const char* payload) {
         printf("Commande UPLOAD reçue. Traitement du fichier %s\n", payload);
         // a implémenter 
     } else if (strcmp(command, "LIST") == 0) {
-        printf("Commande LIST reçue. Envoi de la liste des fichiers.\n");
-        handle_list_command();
+        printf("Commande LIST reçue. Envoi de la liste des fichiers. %s\n", payload);
+        handle_list_command(payload);
         // a implémenter 
     } else if (strcmp(command, "DOWNLOAD") == 0) {
         printf("Commande DOWNLOAD reçue. Envoi du fichier %s\n", payload);

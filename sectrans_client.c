@@ -221,8 +221,8 @@ int main(int argc, char* argv[]) {
 
     if (strcmp(argv[1], "-up") == 0 && argv[2]) {
         send_command("UPLOAD", argv[2], port);
-    } else if (strcmp(argv[1], "-list") == 0) {
-        send_command("LIST", "", port);
+    } else if (strcmp(argv[1], "-list") == 0 && argv[2]) {
+        send_command("LIST", argv[2], port);
     } else if (strcmp(argv[1], "-down") == 0  && argv[2]) {
         send_command("DOWNLOAD", argv[2], port);
     } else if (strcmp(argv[1], "-register") == 0 && argv[3]) {
