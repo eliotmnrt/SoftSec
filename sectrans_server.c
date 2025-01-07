@@ -12,13 +12,146 @@
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
+#include <openssl/ec.h>
+
 
 #define MAX_BUFFER 1024
-#define AUTH_TOKEN "secure_token" // Jeton d'authentification 
 
-/* int authenticate_client(const char* token) {
-    return (strcmp(token, AUTH_TOKEN) == 0);
-} */
+int serverPort = 12345;
+int clientPort = 54321;
+
+EVP_PKEY* localKey;
+EVP_PKEY* peerKey;
+unsigned char secret[32];
+
+// Gérer les erreurs OpenSSL
+void handle_openssl_error() {
+    ERR_print_errors_fp(stderr);
+    abort();
+}
+
+// Génération d'une paire de clés locale
+EVP_PKEY* generate_local_key() {
+    EVP_PKEY* pkey = NULL;
+    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL);
+    if (!pctx) handle_openssl_error();
+
+    if (EVP_PKEY_paramgen_init(pctx) <= 0) handle_openssl_error();
+    if (EVP_PKEY_CTX_set_ec_paramgen_curve_nid(pctx, NID_X9_62_prime256v1) <= 0) handle_openssl_error();
+
+    EVP_PKEY* params = NULL;
+    if (EVP_PKEY_paramgen(pctx, &params) <= 0) handle_openssl_error();
+
+    EVP_PKEY_CTX* kctx = EVP_PKEY_CTX_new(params, NULL);
+    if (!kctx) handle_openssl_error();
+
+    if (EVP_PKEY_keygen_init(kctx) <= 0) handle_openssl_error();
+    if (EVP_PKEY_keygen(kctx, &pkey) <= 0) handle_openssl_error();
+
+    EVP_PKEY_CTX_free(kctx);
+    EVP_PKEY_free(params);
+    EVP_PKEY_CTX_free(pctx);
+
+    return pkey;
+}
+
+// Décoder une clé publique distante brute (non compressée)
+EVP_PKEY* decode_peer_public_key(const unsigned char* pubkey, size_t pubkey_len) {
+    if (!pubkey || pubkey_len != 65) {
+        fprintf(stderr, "Erreur : Clé publique invalide ou longueur incorrecte\n");
+        return NULL;
+    }
+
+    EC_KEY* ec_key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+    if (!ec_key) handle_openssl_error();
+
+    const unsigned char* p = pubkey;
+    if (!o2i_ECPublicKey(&ec_key, &p, pubkey_len)) {
+        fprintf(stderr, "Erreur : Échec du décodage de la clé publique\n");
+        handle_openssl_error();
+    }
+
+    EVP_PKEY* peer_pkey = EVP_PKEY_new();
+    if (!peer_pkey) handle_openssl_error();
+
+    if (!EVP_PKEY_assign_EC_KEY(peer_pkey, ec_key)) {
+        fprintf(stderr, "Erreur : Impossible d'associer la clé EC_KEY à EVP_PKEY\n");
+        handle_openssl_error();
+    }
+
+    return peer_pkey;
+}
+
+// Calcul du secret partagé
+size_t derive_shared_secret(EVP_PKEY* local_key, EVP_PKEY* peer_key, unsigned char* secret, size_t secret_len) {
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(local_key, NULL);
+    if (!ctx) handle_openssl_error();
+
+    if (EVP_PKEY_derive_init(ctx) <= 0) handle_openssl_error();
+
+    if (EVP_PKEY_derive_set_peer(ctx, peer_key) <= 0) {
+        fprintf(stderr, "Erreur : Impossible de définir la clé publique distante\n");
+        handle_openssl_error();
+    }
+
+    if (EVP_PKEY_derive(ctx, NULL, &secret_len) <= 0) handle_openssl_error();
+
+    if (EVP_PKEY_derive(ctx, secret, &secret_len) <= 0) handle_openssl_error();
+
+    EVP_PKEY_CTX_free(ctx);
+    return secret_len;
+}
+
+char* base64_encode(const unsigned char* input, int length) {
+    BIO* bmem = NULL;
+    BIO* b64 = NULL;
+    BUF_MEM* bptr = NULL;
+
+    b64 = BIO_new(BIO_f_base64());
+    bmem = BIO_new(BIO_s_mem());
+    b64 = BIO_push(b64, bmem);
+
+    BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL); // Supprime les sauts de ligne
+    BIO_write(b64, input, length);
+    BIO_flush(b64);
+    BIO_get_mem_ptr(b64, &bptr);
+
+    char* encoded = (char*)malloc(bptr->length + 1);
+    memcpy(encoded, bptr->data, bptr->length);
+    encoded[bptr->length] = '\0';
+
+    BIO_free_all(b64);
+    return encoded;
+}
+
+// Fonction pour encoder une clé publique EC en base64
+char* encode_public_key(EVP_PKEY* pkey) {
+    EC_KEY* ec_key = EVP_PKEY_get1_EC_KEY(pkey);
+    if (!ec_key) {
+        fprintf(stderr, "Erreur : Impossible de récupérer la clé EC\n");
+        return NULL;
+    }
+
+    // Convertir la clé publique EC en format DER
+    unsigned char* pubkey_der = NULL;
+    int pubkey_der_len = i2o_ECPublicKey(ec_key, &pubkey_der);
+    if (pubkey_der_len <= 0) {
+        fprintf(stderr, "Erreur : Impossible de convertir la clé publique en DER\n");
+        EC_KEY_free(ec_key);
+        return NULL;
+    }
+
+    // Encoder la clé publique en base64
+    printf("clé pub");
+    for (size_t i = 0; i < pubkey_der_len; i++) {
+        printf("%02X", pubkey_der[i]);
+    }
+    char* encoded_key = base64_encode(pubkey_der, pubkey_der_len);
+    OPENSSL_free(pubkey_der);
+    EC_KEY_free(ec_key);
+
+    return encoded_key;
+}
 
 int authenticate_user(const char* username, const char* hashed_password, const char * fileName) {
 
@@ -42,7 +175,7 @@ int authenticate_user(const char* username, const char* hashed_password, const c
 }
 
 
-unsigned char* base64_decode(const char* input) {
+unsigned char* base64_decode(const char* input, size_t* decodedLen) {
     BIO *bio, *b64;
     size_t input_len = strlen(input);
     unsigned char* buffer = (unsigned char*)malloc(input_len);
@@ -52,11 +185,12 @@ unsigned char* base64_decode(const char* input) {
     bio = BIO_push(b64, bio);
 
     BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); // Ignore les nouvelles lignes dans l'entrée base64
-    BIO_read(bio, buffer, input_len);
+    *decodedLen = BIO_read(bio, buffer, input_len);
     BIO_free_all(bio);
 
     return buffer;
 }
+
 
 int verify_signature(const char* message, const char* signature, size_t sig_len, const char* public_key_path) {
     // 1. Charger la clé publique
@@ -118,9 +252,8 @@ int verify_signature(const char* message, const char* signature, size_t sig_len,
 }
 
 
-#define MAX_FILE_SIZE (900)
 
-// Fonction pour vérifier le nom du fichier
+#define MAX_FILE_SIZE (900)
 
 
 void handle_upload_command(const char* payload) {
@@ -278,7 +411,43 @@ void handle_register_command(const char* buffer, char * fileNameLogin) {
             perror("Erreur lors de la création du répertoire client");
         }
     }
+}
 
+void handle_ecdh_command(const char* buffer){
+
+    char *encodedPubKey = encode_public_key(localKey);
+    sndmsg(encodedPubKey, clientPort);
+
+    size_t decoded_len = 0;
+    unsigned char* decodedKey = base64_decode(buffer, &decoded_len);
+
+    if (!decodedKey) {
+        fprintf(stderr, "Erreur : Décodage Base64 échoué.\n");
+        exit(1);
+    }
+    printf("key size %d", decoded_len);
+    printf("Clé décodée (en hexadécimal) :\n");
+    for (size_t i = 0; i < sizeof(decodedKey); i++) {
+        printf("%02X", decodedKey[i]);
+    }
+    printf("\n");
+
+    peerKey = decode_peer_public_key(decodedKey, decoded_len);
+
+    if (!peerKey) {
+        printf("Erreur : Échec du traitement de la clé publique distante\n");
+        exit(1);
+    }
+
+    // Calcul du secret partagé
+    size_t secret_len = sizeof(secret);
+    size_t derived_len = derive_shared_secret(localKey, peerKey, secret, secret_len);
+
+    fprintf(stderr, "Secret partagé calculé avec succès (%zu octets).\n", derived_len);
+    for (size_t i = 0; i < derived_len; i++) {
+        printf("%02X", secret[i]);
+    }
+    printf("\n\n\n");
 }
 
 void handle_client_command(const char* command, const char* payload) {
@@ -296,24 +465,34 @@ void handle_client_command(const char* command, const char* payload) {
     } else if (strcmp(command, "REGISTER") == 0) {
         printf("Commande REGISTER reçue.%s\n", payload);
         handle_register_command(payload, "login.txt");
-        
     } else if (strcmp(command, "LOGIN") == 0) {
         printf("Commande LOGIN reçue. %s\n", payload);
         handle_login_command(payload, "login.txt");
-    }else {
+    } else if (strcmp(command, "ECDH") == 0) {
+        printf("Commande ECDH reçue. %s\n", payload);
+        handle_ecdh_command(payload);
+    } else {
         printf("Commande non reconnue : %s\n", command);
     }
 }
 
 int main() {
-    int port = 12345;
+    
     char buffer[MAX_BUFFER];
     
-    if (startserver(port) != 0) {
-        fprintf(stderr, "Erreur : impossible de démarrer le serveur sur le port %d\n", port);
+    if (startserver(serverPort) != 0) {
+        fprintf(stderr, "Erreur : impossible de démarrer le serveur sur le port %d\n", serverPort);
         return 1;
     }
-    printf("Serveur SecTrans démarré sur le port %d\n", port);
+    printf("Serveur SecTrans démarré sur le port %d\n", serverPort);
+
+    // Initialisation d'OpenSSL
+    OpenSSL_add_all_algorithms();
+    ERR_load_crypto_strings();
+
+    // Génération de la paire de clés locale
+    localKey = generate_local_key();
+    fprintf(stderr, "Clé locale générée avec succès.\n");
 
     while (1) {
         memset(buffer, 0, MAX_BUFFER);
@@ -354,7 +533,8 @@ int main() {
                 printf("Erreur : client non authentifié.\n");
                 continue;
             } */
-            char* decoded_signature = base64_decode(encoded_signature);
+            size_t decoded_len = 0;
+            char* decoded_signature = base64_decode(encoded_signature, &decoded_len);
             if (verify_signature(payload, (const char *) decoded_signature, sig_len, "public_key.pem") != 1)
             {
                 fprintf(stderr, "Erreur lors de la verification de la signature du message.\n");

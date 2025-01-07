@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <openssl/ec.h>
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
@@ -11,8 +12,98 @@
 
 
 #define MAX_BUFFER 1024
-#define AUTH_TOKEN "secure_token" // Jeton d'authentification
 
+EVP_PKEY* localKey;
+EVP_PKEY* peerKey;
+unsigned char secret[32];
+
+// Gérer les erreurs OpenSSL
+void handle_openssl_error() {
+    ERR_print_errors_fp(stderr);
+    abort();
+}
+
+// Génération d'une paire de clés locale
+EVP_PKEY* generate_local_key() {
+    EVP_PKEY* pkey = NULL;
+    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL);
+    if (!pctx) handle_openssl_error();
+
+    if (EVP_PKEY_paramgen_init(pctx) <= 0) handle_openssl_error();
+    if (EVP_PKEY_CTX_set_ec_paramgen_curve_nid(pctx, NID_X9_62_prime256v1) <= 0) handle_openssl_error();
+
+    EVP_PKEY* params = NULL;
+    if (EVP_PKEY_paramgen(pctx, &params) <= 0) handle_openssl_error();
+
+    EVP_PKEY_CTX* kctx = EVP_PKEY_CTX_new(params, NULL);
+    if (!kctx) handle_openssl_error();
+
+    if (EVP_PKEY_keygen_init(kctx) <= 0) handle_openssl_error();
+    if (EVP_PKEY_keygen(kctx, &pkey) <= 0) handle_openssl_error();
+
+    EVP_PKEY_CTX_free(kctx);
+    EVP_PKEY_free(params);
+    EVP_PKEY_CTX_free(pctx);
+
+    return pkey;
+}
+
+// Décoder une clé publique distante brute (non compressée)
+EVP_PKEY* decode_peer_public_key(const unsigned char* pubkey, size_t pubkey_len) {
+    if (!pubkey || pubkey_len != 65) {
+        fprintf(stderr, "Erreur : Clé publique invalide ou longueur incorrecte\n");
+        return NULL;
+    }
+
+    EC_KEY* ec_key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+    if (!ec_key) {
+        fprintf(stderr, "Erreur : Impossible de créer EC_KEY\n");
+        handle_openssl_error();
+        return NULL;
+    }
+
+    const unsigned char* p = pubkey;
+    if (!o2i_ECPublicKey(&ec_key, &p, pubkey_len)) {
+        fprintf(stderr, "Erreur : Échec du décodage de la clé publique\n");
+        handle_openssl_error();
+        return NULL;
+    }
+
+    EVP_PKEY *peer_pkey = EVP_PKEY_new();
+    if (!peer_pkey) {
+        fprintf(stderr, "Erreur : Impossible de créer EVP_PKEY\n");
+        handle_openssl_error();
+        return NULL;
+    }
+
+    if (!EVP_PKEY_assign_EC_KEY(peer_pkey, ec_key)) {
+        fprintf(stderr, "Erreur : Impossible d'associer la clé EC_KEY à EVP_PKEY\n");
+        handle_openssl_error();
+        return NULL;
+    }
+
+    return peer_pkey;
+}
+
+// Calcul du secret partagé
+size_t derive_shared_secret(EVP_PKEY* local_key, EVP_PKEY* peer_key, unsigned char* secret, size_t secret_len) {
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(local_key, NULL);
+    if (!ctx) handle_openssl_error();
+
+    if (EVP_PKEY_derive_init(ctx) <= 0) handle_openssl_error();
+
+    if (EVP_PKEY_derive_set_peer(ctx, peer_key) <= 0) {
+        fprintf(stderr, "Erreur : Impossible de définir la clé publique distante\n");
+        handle_openssl_error();
+    }
+
+    if (EVP_PKEY_derive(ctx, NULL, &secret_len) <= 0) handle_openssl_error();
+
+    if (EVP_PKEY_derive(ctx, secret, &secret_len) <= 0) handle_openssl_error();
+
+    EVP_PKEY_CTX_free(ctx);
+    return secret_len;
+}
 
 void generate_rsa_keys(const char* private_key_path, const char* public_key_path) {
     int key_length = 2048; // Taille de la clé (2048 bits)
@@ -162,6 +253,51 @@ char* base64_encode(const unsigned char* input, int length) {
     return encoded;
 }
 
+// Fonction pour encoder une clé publique EC en base64
+char* encode_public_key(EVP_PKEY* pkey) {
+    EC_KEY* ec_key = EVP_PKEY_get1_EC_KEY(pkey);
+    if (!ec_key) {
+        fprintf(stderr, "Erreur : Impossible de récupérer la clé EC\n");
+        return NULL;
+    }
+
+    // Convertir la clé publique EC en format DER
+    unsigned char* pubkey_der = NULL;
+    int pubkey_der_len = i2o_ECPublicKey(ec_key, &pubkey_der);
+    if (pubkey_der_len <= 0) {
+        fprintf(stderr, "Erreur : Impossible de convertir la clé publique en DER\n");
+        EC_KEY_free(ec_key);
+        return NULL;
+    }
+
+    // Encoder la clé publique en base64
+    printf("clé pub");
+    for (size_t i = 0; i < pubkey_der_len; i++) {
+        printf("%02X", pubkey_der[i]);
+    }
+    char* encoded_key = base64_encode(pubkey_der, pubkey_der_len);
+    OPENSSL_free(pubkey_der);
+    EC_KEY_free(ec_key);
+
+    return encoded_key;
+}
+
+unsigned char* base64_decode(const char* input, size_t* decodedLen) {
+    BIO *bio, *b64;
+    size_t input_len = strlen(input);
+    unsigned char* buffer = (unsigned char*)malloc(input_len);
+    
+    bio = BIO_new_mem_buf((void*)input, -1);
+    b64 = BIO_new(BIO_f_base64());
+    bio = BIO_push(b64, bio);
+
+    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); // Ignore les nouvelles lignes dans l'entrée base64
+    *decodedLen = BIO_read(bio, buffer, input_len);
+    BIO_free_all(bio);
+
+    return buffer;
+}
+
 
 void hash_password(const char* password, char* hash_output) {
     unsigned char hash[EVP_MAX_MD_SIZE];
@@ -292,40 +428,102 @@ void send_command(const char* command, char* payload, int port) {
     }
 }
 
+void handle_ecdh_command(const char* buffer){
+    size_t decoded_len = 0;
+    unsigned char* decodedKey = base64_decode(buffer, &decoded_len);
+
+    if (!decodedKey) {
+        fprintf(stderr, "Erreur : Décodage Base64 échoué.\n");
+        exit(1);
+    }
+    printf("key size %d", decoded_len);
+    printf("Clé décodée (en hexadécimal) :\n");
+    for (size_t i = 0; i < decoded_len; i++) {
+        printf("%02X", decodedKey[i]);
+    }
+    printf("\n");
+    peerKey = decode_peer_public_key(decodedKey, decoded_len);
+    if (!peerKey) {
+        printf("Erreur : Échec du traitement de la clé publique distante\n");
+        exit(1);
+    }
+
+    // Calcul du secret partagé
+    size_t secret_len = sizeof(secret);
+    size_t derived_len = derive_shared_secret(localKey, peerKey, secret, secret_len);
+
+    fprintf(stderr, "Secret partagé calculé avec succès (%zu octets).\n", derived_len);
+    for (size_t i = 0; i < derived_len; i++) {
+        printf("%02X", secret[i]);
+    }
+    printf("\n\n\n");
+}
+
 int main(int argc, char* argv[]) {
     if (argc < 3) {
         fprintf(stderr, "Usage : %s -<option> <file>\n", argv[0]);
         return 1;
     }
 
+    int clientPort = 54321;
+    char buffer[MAX_BUFFER];
+    
+    if (startserver(clientPort) != 0) {
+        fprintf(stderr, "Erreur : impossible de démarrer le serveur sur le port %d\n", clientPort);
+        return 1;
+    }
+    printf("Client SecTrans démarré sur le port %d\n", clientPort);
+
+    // Initialisation d'OpenSSL
+    OpenSSL_add_all_algorithms();
+    ERR_load_crypto_strings();
+
+    // Génération de la paire de clés locale
+    localKey = generate_local_key();
+    fprintf(stderr, "Clé locale générée avec succès.\n");
+
     const char* private_key_path = "private_key.pem";
     const char* public_key_path = "public_key.pem";
 
     generate_rsa_keys(private_key_path, public_key_path);
 
-    int port = 12345;
+    int serverPort = 12345;
 
     if (strcmp(argv[1], "-up") == 0 && argv[2]) {
-        handle_upload_command("UPLOAD", argv[2], port);
+        handle_upload_command("UPLOAD", argv[2], serverPort);
     } else if (strcmp(argv[1], "-list") == 0) {
-        send_command("LIST", "", port);
+        send_command("LIST", "", serverPort);
     } else if (strcmp(argv[1], "-down") == 0  && argv[2]) {
-        send_command("DOWNLOAD", argv[2], port);
+        send_command("DOWNLOAD", argv[2], serverPort);
     } else if (strcmp(argv[1], "-register") == 0 && argv[3]) {
         char hashed_password[65];
         hash_password(argv[3], hashed_password);
         char logs[56];
         snprintf(logs, sizeof(logs), "%s %s", argv[2], hashed_password);
-        send_command("REGISTER", logs, port);
+        send_command("REGISTER", logs, serverPort);
     } else if (strcmp(argv[1], "-login") == 0 && argv[3]) {
+        char *encodedPubKey = encode_public_key(localKey);
+        printf("\n\nkeyy %s\n", encodedPubKey);
+        send_command("ECDH", encodedPubKey, serverPort);
+        char bufferECDH[MAX_BUFFER];
+        if(getmsg(bufferECDH) == 0){
+            handle_ecdh_command(bufferECDH);
+        }
         char hashed_password[65];
         hash_password(argv[3], hashed_password);
         char logs[56];
         snprintf(logs, sizeof(logs), "%s %s", argv[2], hashed_password);
-        send_command("LOGIN", logs, port);
+        send_command("LOGIN", logs, serverPort);
     } else {
         fprintf(stderr, "Option invalide : %s\n", argv[1]);
         return 1;
+    }
+
+    while (1) {
+        memset(buffer, 0, MAX_BUFFER);
+        if (getmsg(buffer) == 0) {
+            printf("Message reçu : %s\n\n", buffer);
+        }
     }
 
     return 0;
