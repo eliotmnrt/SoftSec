@@ -9,6 +9,8 @@
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
+#include <openssl/aes.h>
+#include <openssl/rand.h>
 
 
 #define MAX_BUFFER 1024
@@ -298,6 +300,31 @@ unsigned char* base64_decode(const char* input, size_t* decodedLen) {
     return buffer;
 }
 
+int encrypt_message(const char* plaintext, const unsigned char* key, unsigned char* iv, unsigned char* ciphertext, int* ciphertext_len) {
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return 0;
+
+    int len;
+    if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv)) {
+        EVP_CIPHER_CTX_free(ctx);
+        return 0;
+    }
+
+    if (1 != EVP_EncryptUpdate(ctx, ciphertext, &len, (unsigned char*)plaintext, strlen(plaintext))) {
+        EVP_CIPHER_CTX_free(ctx);
+        return 0;
+    }
+    *ciphertext_len = len;
+
+    if (1 != EVP_EncryptFinal_ex(ctx, ciphertext + len, &len)) {
+        EVP_CIPHER_CTX_free(ctx);
+        return 0;
+    }
+    *ciphertext_len += len;
+
+    EVP_CIPHER_CTX_free(ctx);
+    return 1;
+}
 
 void hash_password(const char* password, char* hash_output) {
     unsigned char hash[EVP_MAX_MD_SIZE];
@@ -388,15 +415,49 @@ void handle_upload_command(const char* command, char* filename, int port){
 
     char * payload = prepare_payload(filename);
 
-    // Signature du message
-    if (!sign_message(payload, "private_key.pem", signature, &sig_len)) {
-        fprintf(stderr, "Erreur lors de la signature du message.\n");
+// Génération d'un IV aléatoire
+    unsigned char iv[AES_BLOCK_SIZE];
+    if (!RAND_bytes(iv, AES_BLOCK_SIZE)) {
+        fprintf(stderr, "Erreur : impossible de générer l'IV.\n");
+        return;
     }
-    char* encoded_signature = base64_encode(signature, sig_len);
-    printf("signature %s\n", encoded_signature);
-    printf("Message : %s\n", payload);
-    snprintf(buffer, MAX_BUFFER, "%s %s %d %s", command, encoded_signature, sig_len, payload);
+    
 
+    // Signature du message chiffré
+    if (!sign_message((char*)payload, "private_key.pem", signature, &sig_len)) {
+        fprintf(stderr, "Erreur lors de la signature du message.\n");
+        return;
+    }
+
+    // Chiffrement du message (payload)
+    unsigned char ciphertext[MAX_BUFFER];
+    int ciphertext_len;
+    if (!encrypt_message(payload, secret, iv, ciphertext, &ciphertext_len)) {
+        fprintf(stderr, "Erreur : échec du chiffrement du message.\n");
+        return;
+    }
+
+    
+    char* encoded_signature = base64_encode(signature, sig_len);
+
+    // Encoder le message chiffré et l'IV en base64 pour l'envoi
+    char* encoded_ciphertext = base64_encode(ciphertext, ciphertext_len);
+    char* encoded_iv = base64_encode(iv, AES_BLOCK_SIZE);
+
+    printf("iv : ");
+    for (int i=0; i<16; i++){
+        printf("%d", encoded_iv[i]);
+    }
+    printf("\n");
+    printf("Message : %s\n", payload);
+    printf("Message chiffré : %s\n", ciphertext);
+    printf("Message chiffré (base64) : %s\n", encoded_ciphertext);
+    printf("IV (base64) : %s\n", encoded_iv);
+
+    // Création du buffer pour l'envoi
+    snprintf(buffer, MAX_BUFFER, "%s %s %d %s %s", command, encoded_signature, sig_len, encoded_iv, encoded_ciphertext);
+
+    // Envoi du message
     if (sndmsg(buffer, port) == 0) {
         printf("Commande envoyée : %s\n", buffer);
     } else {
@@ -412,15 +473,49 @@ void send_command(const char* command, char* payload, int port) {
     unsigned char signature[256];
     unsigned int sig_len;
 
-    // Signature du message
-    if (!sign_message(payload, "private_key.pem", signature, &sig_len)) {
-        fprintf(stderr, "Erreur lors de la signature du message.\n");
+    // Génération d'un IV aléatoire
+    unsigned char iv[AES_BLOCK_SIZE];
+    if (!RAND_bytes(iv, AES_BLOCK_SIZE)) {
+        fprintf(stderr, "Erreur : impossible de générer l'IV.\n");
+        return;
     }
-    char* encoded_signature = base64_encode(signature, sig_len);
-    printf("signature %s\n", encoded_signature);
-    printf("Message : %s\n", payload);
-    snprintf(buffer, MAX_BUFFER, "%s %s %d %s", command, encoded_signature, sig_len, payload);
+    
 
+    // Signature du message chiffré
+    if (!sign_message((char*)payload, "private_key.pem", signature, &sig_len)) {
+        fprintf(stderr, "Erreur lors de la signature du message.\n");
+        return;
+    }
+
+    // Chiffrement du message (payload)
+    unsigned char ciphertext[MAX_BUFFER];
+    int ciphertext_len;
+    if (!encrypt_message(payload, secret, iv, ciphertext, &ciphertext_len)) {
+        fprintf(stderr, "Erreur : échec du chiffrement du message.\n");
+        return;
+    }
+
+    
+    char* encoded_signature = base64_encode(signature, sig_len);
+
+    // Encoder le message chiffré et l'IV en base64 pour l'envoi
+    char* encoded_ciphertext = base64_encode(ciphertext, ciphertext_len);
+    char* encoded_iv = base64_encode(iv, AES_BLOCK_SIZE);
+
+    printf("iv : ");
+    for (int i=0; i<16; i++){
+        printf("%d", encoded_iv[i]);
+    }
+    printf("\n");
+    printf("Message : %s\n", payload);
+    printf("Message chiffré : %s\n", ciphertext);
+    printf("Message chiffré (base64) : %s\n", encoded_ciphertext);
+    printf("IV (base64) : %s\n", encoded_iv);
+
+    // Création du buffer pour l'envoi
+    snprintf(buffer, MAX_BUFFER, "%s %s %d %s %s", command, encoded_signature, sig_len, encoded_iv, encoded_ciphertext);
+
+    // Envoi du message
     if (sndmsg(buffer, port) == 0) {
         printf("Commande envoyée : %s\n", buffer);
     } else {
@@ -491,21 +586,39 @@ int main(int argc, char* argv[]) {
 
     if (strcmp(argv[1], "-up") == 0 && argv[2]) {
         handle_upload_command("UPLOAD", argv[2], serverPort);
+
     } else if (strcmp(argv[1], "-list") == 0) {
         send_command("LIST", "", serverPort);
+
     } else if (strcmp(argv[1], "-down") == 0  && argv[2]) {
         send_command("DOWNLOAD", argv[2], serverPort);
+
     } else if (strcmp(argv[1], "-register") == 0 && argv[3]) {
+        char bufferECDH[MAX_BUFFER];
+        char *encodedPubKey = encode_public_key(localKey);
+        printf("\n\nkeyy %s\n", encodedPubKey);
+        snprintf(bufferECDH, MAX_BUFFER, "ECDH %s", encodedPubKey);
+        sndmsg(bufferECDH, serverPort),
+
+        memset(bufferECDH, 0, MAX_BUFFER);
+        if(getmsg(bufferECDH) == 0){
+            handle_ecdh_command(bufferECDH);
+        }
+        
         char hashed_password[65];
         hash_password(argv[3], hashed_password);
         char logs[56];
         snprintf(logs, sizeof(logs), "%s %s", argv[2], hashed_password);
         send_command("REGISTER", logs, serverPort);
+
     } else if (strcmp(argv[1], "-login") == 0 && argv[3]) {
+        char bufferECDH[MAX_BUFFER];
         char *encodedPubKey = encode_public_key(localKey);
         printf("\n\nkeyy %s\n", encodedPubKey);
-        send_command("ECDH", encodedPubKey, serverPort);
-        char bufferECDH[MAX_BUFFER];
+        snprintf(bufferECDH, MAX_BUFFER, "ECDH %s", encodedPubKey);
+        sndmsg(bufferECDH, serverPort),
+
+        memset(bufferECDH, 0, MAX_BUFFER);
         if(getmsg(bufferECDH) == 0){
             handle_ecdh_command(bufferECDH);
         }
@@ -514,6 +627,7 @@ int main(int argc, char* argv[]) {
         char logs[56];
         snprintf(logs, sizeof(logs), "%s %s", argv[2], hashed_password);
         send_command("LOGIN", logs, serverPort);
+
     } else {
         fprintf(stderr, "Option invalide : %s\n", argv[1]);
         return 1;
