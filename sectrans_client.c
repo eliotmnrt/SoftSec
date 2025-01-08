@@ -218,6 +218,14 @@ int main(int argc, char* argv[]) {
     generate_rsa_keys(private_key_path, public_key_path);
 
     int port = 12345;
+    int clientPort = 54321;
+    char buffer[MAX_BUFFER];
+
+    if (startserver(clientPort) != 0) {
+        fprintf(stderr, "Erreur : impossible de démarrer le serveur sur le port %d\n", clientPort);
+        return 1;
+    }
+    printf("Client SecTrans démarré sur le port %d\n", clientPort);
 
     if (strcmp(argv[1], "-up") == 0 && argv[2]) {
         send_command("UPLOAD", argv[2], port);
