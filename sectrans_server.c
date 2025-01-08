@@ -159,6 +159,7 @@ int authenticate_user(const char* username, const char* hashed_password, const c
     FILE* file = fopen(fileName, "r");
     if (!file) {
         perror("Erreur lors de l'ouverture du fichier utilisateur\n");
+        send_message_to_client("ERROR: Erreur lors de l'ouverture du fichier utilisateur");
         return 0; // Impossible de lire le fichier
     }
 
@@ -262,11 +263,13 @@ void handle_upload_command(const char* payload) {
     const char* file_content = strchr(payload, ' '); // Trouve le séparateur
     if (!file_content) {
         printf("ERROR: Format de payload invalide pour UPLOAD\n");
+        send_message_to_client("ERROR: Format de payload invalide pour UPLOAD");
         return;
     }
     size_t filename_length = file_content - payload;
     if (filename_length >= sizeof(filename)) {
         printf("ERROR: Nom de fichier trop long\n");
+        send_message_to_client("ERROR: Nom de fichier trop long");
         return;
     }
     strncpy(filename, payload, filename_length);
@@ -280,6 +283,7 @@ void handle_upload_command(const char* payload) {
     // Vérification de la taille du fichier
     if (content_length > MAX_FILE_SIZE) {
         printf("ERROR: Fichier trop volumineux (%zu octets)\n", content_length);
+        send_message_to_client("ERROR: Fichier trop volumineux");
         return;
     }
     // Optionnel : Vérifier le type de contenu (si attendu comme texte ou binaire)
@@ -296,12 +300,14 @@ void handle_upload_command(const char* payload) {
     FILE* file = fopen(path, "w");
     if (!file) {
         perror("ERROR: Impossible de créer le fichier sur le serveur");
+        send_message_to_client("ERROR: Impossible de créer le fichier sur le serveur");
         return;
     }
     fwrite(file_content, 1, content_length, file);
     fclose(file);
 
     printf("SUCCESS: Fichier '%s' téléchargé avec succès (%zu octets)\n", filename, content_length);
+    send_message_to_client("SUCCESS: Fichier téléchargé avec succès");
 }
 
 
@@ -312,6 +318,7 @@ void handle_download_command(const char* filename) {
     // Vérification du nom du fichier (évite les attaques par parcours de répertoires)
     if (strstr(filename, "../") || strchr(filename, '/') || strchr(filename, '\\')) {
         printf("ERROR: Nom de fichier invalide : %s\n", filename);
+        send_message_to_client("ERROR: Nom de fichier invalide");
         return;
     }
 
@@ -319,6 +326,7 @@ void handle_download_command(const char* filename) {
     FILE* file = fopen(filepath, "rb");
     if (!file) {
         perror("ERROR: Impossible d'ouvrir le fichier");
+        send_message_to_client("ERROR: Impossible d'ouvrir le fichier");
         return;
     }
 
@@ -330,6 +338,7 @@ void handle_download_command(const char* filename) {
     // Vérifier si le fichier est trop volumineux
     if (file_size > MAX_FILE_SIZE) {
         printf("ERROR: Fichier trop volumineux (%ld octets)\n", file_size);
+        send_message_to_client("ERROR: Fichier trop volumineux");
         fclose(file);
         return;
     }
@@ -338,6 +347,8 @@ void handle_download_command(const char* filename) {
     char* file_content = (char*)malloc(file_size + 1);
     if (!file_content) {
         printf("ERROR: Mémoire insuffisante\n");
+        send_message_to_client("ERROR: Mémoire insuffisante");
+
         fclose(file);
         return;
     }
@@ -345,6 +356,7 @@ void handle_download_command(const char* filename) {
     size_t bytes_read = fread(file_content, 1, file_size, file);
     if (bytes_read != file_size) {
         printf("ERROR: Erreur lors de la lecture du fichier\n");
+        send_message_to_client("ERROR: Erreur lors de la lecture du fichier");
         free(file_content);
         fclose(file);
         return;
@@ -365,13 +377,20 @@ void handle_login_command(const char* buffer, char * fileNameLogin) {
     char username[256], hashedPassword[256];
     if (sscanf(buffer, "%s %s", username, hashedPassword) != 2) {
         printf("ERROR: Invalid login format\n");
+        send_message_to_client("ERROR: Invalid login format\n");
+
         return;
     }
 
     if (authenticate_user(username, hashedPassword, fileNameLogin)) {
         printf("SUCCESS: Login successful\n");
+        send_message_to_client("SUCCESS: Login successful");
+
     } else {
         printf("ERROR: Invalid credentials\n");
+        send_message_to_client("ERROR: Invalid credentials\n");
+
+
     }
 }
 
@@ -379,19 +398,22 @@ void handle_login_command(const char* buffer, char * fileNameLogin) {
 void handle_register_command(const char* buffer, char * fileNameLogin) {
     char username[256], hashedPassword[256];
     if (sscanf(buffer, "%s %s", username, hashedPassword) != 2) {
-        printf("ERROR: Invalid login format\n");
+        printf("ERREUR: Format du login invalide\n");
+        send_message_to_client("ERROR: Format du login invalide\n");
         exit(1);
     }
 
     FILE* file = fopen(fileNameLogin, "a");
     if (!file) {
         perror("Erreur lors de l'ouverture du fichier utilisateur\n");
+        send_message_to_client("ERROR: problème avec l'ouverture du fichier utilisateur");
         fclose(file);
         exit(1);
     }
     
     if (fprintf(file, "%s %s\n", username, hashedPassword) < 0) {
         perror("Erreur lors de l'écriture dans le fichier");
+        send_message_to_client("ERROR: l'écriture dans le fichier échoué");
         fclose(file);
         exit(1);
     }
@@ -405,12 +427,15 @@ void handle_register_command(const char* buffer, char * fileNameLogin) {
 
     if (mkdir(dir, 0700) == 0) {
         printf("Répertoire client créé avec succès : %s\n", dir);
+        send_message_to_client("SUCCESS: Répertoire client crée avec succès");
     } else {
         // Gérer les erreurs
         if (errno == EEXIST) {
             printf("Le répertoire client existe déjà : %s\n", dir);
+            send_message_to_client("ERROR: l'utilisateur existe déjà");
         } else {
             perror("Erreur lors de la création du répertoire client");
+            send_message_to_client("ERROR: erreur lors de la création du répertoire client");
         }
     }
 }
@@ -425,6 +450,7 @@ void handle_ecdh_command(const char* buffer){
 
     if (!decodedKey) {
         fprintf(stderr, "Erreur : Décodage Base64 échoué.\n");
+        send_message_to_client('Error: Décodage Base64 échoué ');
         exit(1);
     }
     printf("key size %d", decoded_len);
@@ -438,6 +464,7 @@ void handle_ecdh_command(const char* buffer){
 
     if (!peerKey) {
         printf("Erreur : Échec du traitement de la clé publique distante\n");
+        send_message_to_client("ERROR: Échec du traitement de la clé publique distante");
         exit(1);
     }
 
@@ -463,22 +490,12 @@ void handle_list_command(const char * username) {
     DIR* dir = opendir(directory_name);
     if (dir == NULL) {
         perror("Erreur lors de l'ouverture du répertoire files");
+        send_message_to_client("Erreur lors de l'ouverture du répertoire files");
+
         return;
     }
 
     printf("Contenu du répertoire '%s' :\n", directory_name);
-
-    // // Parcourt chaque entrée du répertoire
-    // while ((entry = readdir(dir)) != NULL) {
-    //     // Ignore les entrées spéciales "." et ".."
-    //     if (entry->d_name[0] == '.' && 
-    //        (entry->d_name[1] == '\0' || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
-    //         continue;
-    //     }
-
-    //     printf("- %s\n", entry->d_name); // Affiche le nom du fichier ou du dossier
-    // }
-    // Buffer pour stocker la réponse
     char response[4096] = ""; 
     size_t response_length = 0;
 
@@ -502,12 +519,12 @@ void handle_list_command(const char * username) {
         }
         
     }
-    send_message(response);
+    send_message_to_client(response);
 
     closedir(dir); // Ferme le répertoire
 
 }
-void send_message(const char *message) {
+void send_message_to_client(const char *message) {
     // Check if the message is NULL
     int clientPort = 54321;
 
