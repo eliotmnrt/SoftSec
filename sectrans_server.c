@@ -3,19 +3,156 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
 #include <unistd.h>
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
 #include <dirent.h>
+#include <openssl/ec.h>
+
 
 #define MAX_BUFFER 1024
-#define AUTH_TOKEN "secure_token" // Jeton d'authentification 
 
-/* int authenticate_client(const char* token) {
-    return (strcmp(token, AUTH_TOKEN) == 0);
-} */
+int serverPort = 12345;
+int clientPort = 54321;
+
+EVP_PKEY* localKey;
+EVP_PKEY* peerKey;
+unsigned char secret[32];
+
+// Gérer les erreurs OpenSSL
+void handle_openssl_error() {
+    ERR_print_errors_fp(stderr);
+    abort();
+}
+
+// Génération d'une paire de clés locale
+EVP_PKEY* generate_local_key() {
+    EVP_PKEY* pkey = NULL;
+    EVP_PKEY_CTX* pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL);
+    if (!pctx) handle_openssl_error();
+
+    if (EVP_PKEY_paramgen_init(pctx) <= 0) handle_openssl_error();
+    if (EVP_PKEY_CTX_set_ec_paramgen_curve_nid(pctx, NID_X9_62_prime256v1) <= 0) handle_openssl_error();
+
+    EVP_PKEY* params = NULL;
+    if (EVP_PKEY_paramgen(pctx, &params) <= 0) handle_openssl_error();
+
+    EVP_PKEY_CTX* kctx = EVP_PKEY_CTX_new(params, NULL);
+    if (!kctx) handle_openssl_error();
+
+    if (EVP_PKEY_keygen_init(kctx) <= 0) handle_openssl_error();
+    if (EVP_PKEY_keygen(kctx, &pkey) <= 0) handle_openssl_error();
+
+    EVP_PKEY_CTX_free(kctx);
+    EVP_PKEY_free(params);
+    EVP_PKEY_CTX_free(pctx);
+
+    return pkey;
+}
+
+// Décoder une clé publique distante brute (non compressée)
+EVP_PKEY* decode_peer_public_key(const unsigned char* pubkey, size_t pubkey_len) {
+    if (!pubkey || pubkey_len != 65) {
+        fprintf(stderr, "Erreur : Clé publique invalide ou longueur incorrecte\n");
+        return NULL;
+    }
+
+    EC_KEY* ec_key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+    if (!ec_key) handle_openssl_error();
+
+    const unsigned char* p = pubkey;
+    if (!o2i_ECPublicKey(&ec_key, &p, pubkey_len)) {
+        fprintf(stderr, "Erreur : Échec du décodage de la clé publique\n");
+        handle_openssl_error();
+    }
+
+    EVP_PKEY* peer_pkey = EVP_PKEY_new();
+    if (!peer_pkey) handle_openssl_error();
+
+    if (!EVP_PKEY_assign_EC_KEY(peer_pkey, ec_key)) {
+        fprintf(stderr, "Erreur : Impossible d'associer la clé EC_KEY à EVP_PKEY\n");
+        handle_openssl_error();
+    }
+
+    return peer_pkey;
+}
+
+// Calcul du secret partagé
+size_t derive_shared_secret(EVP_PKEY* local_key, EVP_PKEY* peer_key, unsigned char* secret, size_t secret_len) {
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(local_key, NULL);
+    if (!ctx) handle_openssl_error();
+
+    if (EVP_PKEY_derive_init(ctx) <= 0) handle_openssl_error();
+
+    if (EVP_PKEY_derive_set_peer(ctx, peer_key) <= 0) {
+        fprintf(stderr, "Erreur : Impossible de définir la clé publique distante\n");
+        handle_openssl_error();
+    }
+
+    if (EVP_PKEY_derive(ctx, NULL, &secret_len) <= 0) handle_openssl_error();
+
+    if (EVP_PKEY_derive(ctx, secret, &secret_len) <= 0) handle_openssl_error();
+
+    EVP_PKEY_CTX_free(ctx);
+    return secret_len;
+}
+
+char* base64_encode(const unsigned char* input, int length) {
+    BIO* bmem = NULL;
+    BIO* b64 = NULL;
+    BUF_MEM* bptr = NULL;
+
+    b64 = BIO_new(BIO_f_base64());
+    bmem = BIO_new(BIO_s_mem());
+    b64 = BIO_push(b64, bmem);
+
+    BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL); // Supprime les sauts de ligne
+    BIO_write(b64, input, length);
+    BIO_flush(b64);
+    BIO_get_mem_ptr(b64, &bptr);
+
+    char* encoded = (char*)malloc(bptr->length + 1);
+    memcpy(encoded, bptr->data, bptr->length);
+    encoded[bptr->length] = '\0';
+
+    BIO_free_all(b64);
+    return encoded;
+}
+
+// Fonction pour encoder une clé publique EC en base64
+char* encode_public_key(EVP_PKEY* pkey) {
+    EC_KEY* ec_key = EVP_PKEY_get1_EC_KEY(pkey);
+    if (!ec_key) {
+        fprintf(stderr, "Erreur : Impossible de récupérer la clé EC\n");
+        return NULL;
+    }
+
+    // Convertir la clé publique EC en format DER
+    unsigned char* pubkey_der = NULL;
+    int pubkey_der_len = i2o_ECPublicKey(ec_key, &pubkey_der);
+    if (pubkey_der_len <= 0) {
+        fprintf(stderr, "Erreur : Impossible de convertir la clé publique en DER\n");
+        EC_KEY_free(ec_key);
+        return NULL;
+    }
+
+    // Encoder la clé publique en base64
+    printf("clé pub");
+    for (size_t i = 0; i < pubkey_der_len; i++) {
+        printf("%02X", pubkey_der[i]);
+    }
+    char* encoded_key = base64_encode(pubkey_der, pubkey_der_len);
+    OPENSSL_free(pubkey_der);
+    EC_KEY_free(ec_key);
+
+    return encoded_key;
+}
 
 int authenticate_user(const char* username, const char* hashed_password, const char * fileName) {
 
@@ -39,7 +176,7 @@ int authenticate_user(const char* username, const char* hashed_password, const c
 }
 
 
-unsigned char* base64_decode(const char* input) {
+unsigned char* base64_decode(const char* input, size_t* decodedLen) {
     BIO *bio, *b64;
     size_t input_len = strlen(input);
     unsigned char* buffer = (unsigned char*)malloc(input_len);
@@ -49,11 +186,12 @@ unsigned char* base64_decode(const char* input) {
     bio = BIO_push(b64, bio);
 
     BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); // Ignore les nouvelles lignes dans l'entrée base64
-    BIO_read(bio, buffer, input_len);
+    *decodedLen = BIO_read(bio, buffer, input_len);
     BIO_free_all(bio);
 
     return buffer;
 }
+
 
 int verify_signature(const char* message, const char* signature, size_t sig_len, const char* public_key_path) {
     // 1. Charger la clé publique
@@ -114,6 +252,115 @@ int verify_signature(const char* message, const char* signature, size_t sig_len,
     return result == 1; // Retourne 1 si la signature est valide
 }
 
+
+
+#define MAX_FILE_SIZE (900)
+
+
+void handle_upload_command(const char* payload) {
+    char filename[256];
+    const char* file_content = strchr(payload, ' '); // Trouve le séparateur
+    if (!file_content) {
+        printf("ERROR: Format de payload invalide pour UPLOAD\n");
+        return;
+    }
+    size_t filename_length = file_content - payload;
+    if (filename_length >= sizeof(filename)) {
+        printf("ERROR: Nom de fichier trop long\n");
+        return;
+    }
+    strncpy(filename, payload, filename_length);
+    filename[filename_length] = '\0'; // Null-terminate le nom du fichier
+    // Vérification de sécurité sur le nom du fichier
+
+
+    file_content++; // Avance pour pointer après l'espace
+    size_t content_length = strlen(file_content);
+
+    // Vérification de la taille du fichier
+    if (content_length > MAX_FILE_SIZE) {
+        printf("ERROR: Fichier trop volumineux (%zu octets)\n", content_length);
+        return;
+    }
+    // Optionnel : Vérifier le type de contenu (si attendu comme texte ou binaire)
+    // Exemple : Rejet si fichier contient des caractères non-ASCII
+    for (size_t i = 0; i < content_length; i++) {
+        if (file_content[i] < 32 && file_content[i] != '\n' && file_content[i] != '\r' && file_content[i] != '\t') {
+            printf("ERROR: Contenu du fichier non valide (caractère binaire détecté)\n");
+        }
+    }
+    
+    // Écriture du fichier sur le serveur
+    char path[512];
+    snprintf(path, sizeof(path), "./files/test/%s", filename);
+    FILE* file = fopen(path, "w");
+    if (!file) {
+        perror("ERROR: Impossible de créer le fichier sur le serveur");
+        return;
+    }
+    fwrite(file_content, 1, content_length, file);
+    fclose(file);
+
+    printf("SUCCESS: Fichier '%s' téléchargé avec succès (%zu octets)\n", filename, content_length);
+}
+
+
+void handle_download_command(const char* filename) {
+    char filepath[512] = "./files/test/"; // Dossier contenant les fichiers
+    strcat(filepath, filename);      // Chemin complet du fichier
+
+    // Vérification du nom du fichier (évite les attaques par parcours de répertoires)
+    if (strstr(filename, "../") || strchr(filename, '/') || strchr(filename, '\\')) {
+        printf("ERROR: Nom de fichier invalide : %s\n", filename);
+        return;
+    }
+
+    // Ouvrir le fichier en mode lecture
+    FILE* file = fopen(filepath, "rb");
+    if (!file) {
+        perror("ERROR: Impossible d'ouvrir le fichier");
+        return;
+    }
+
+    // Obtenir la taille du fichier
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    rewind(file);
+
+    // Vérifier si le fichier est trop volumineux
+    if (file_size > MAX_FILE_SIZE) {
+        printf("ERROR: Fichier trop volumineux (%ld octets)\n", file_size);
+        fclose(file);
+        return;
+    }
+
+    // Lire le contenu du fichier
+    char* file_content = (char*)malloc(file_size + 1);
+    if (!file_content) {
+        printf("ERROR: Mémoire insuffisante\n");
+        fclose(file);
+        return;
+    }
+
+    size_t bytes_read = fread(file_content, 1, file_size, file);
+    if (bytes_read != file_size) {
+        printf("ERROR: Erreur lors de la lecture du fichier\n");
+        free(file_content);
+        fclose(file);
+        return;
+    }
+    file_content[file_size] = '\0'; // Null-terminate le contenu
+
+    fclose(file);
+
+    // Envoyer le contenu au client (simulé ici avec un affichage)
+    printf("SUCCESS: Fichier '%s' téléchargé (%ld octets)\n", filename, file_size);
+    printf("Contenu du fichier :\n%s\n", file_content);
+
+    free(file_content);
+}
+
+
 void handle_login_command(const char* buffer, char * fileNameLogin) {
     char username[256], hashedPassword[256];
     if (sscanf(buffer, "%s %s", username, hashedPassword) != 2) {
@@ -149,10 +396,61 @@ void handle_register_command(const char* buffer, char * fileNameLogin) {
         exit(1);
     }
 
-    fclose(file); // Fermer le fichier
-    
+
+    fclose(file);
+
+    //ajout de du repertoire du client
+    char dir[512];
+    snprintf(dir, sizeof(dir), "./files/%s", username);
+
+    if (mkdir(dir, 0700) == 0) {
+        printf("Répertoire client créé avec succès : %s\n", dir);
+    } else {
+        // Gérer les erreurs
+        if (errno == EEXIST) {
+            printf("Le répertoire client existe déjà : %s\n", dir);
+        } else {
+            perror("Erreur lors de la création du répertoire client");
+        }
+    }
 }
 
+void handle_ecdh_command(const char* buffer){
+
+    char *encodedPubKey = encode_public_key(localKey);
+    sndmsg(encodedPubKey, clientPort);
+
+    size_t decoded_len = 0;
+    unsigned char* decodedKey = base64_decode(buffer, &decoded_len);
+
+    if (!decodedKey) {
+        fprintf(stderr, "Erreur : Décodage Base64 échoué.\n");
+        exit(1);
+    }
+    printf("key size %d", decoded_len);
+    printf("Clé décodée (en hexadécimal) :\n");
+    for (size_t i = 0; i < sizeof(decodedKey); i++) {
+        printf("%02X", decodedKey[i]);
+    }
+    printf("\n");
+
+    peerKey = decode_peer_public_key(decodedKey, decoded_len);
+
+    if (!peerKey) {
+        printf("Erreur : Échec du traitement de la clé publique distante\n");
+        exit(1);
+    }
+
+    // Calcul du secret partagé
+    size_t secret_len = sizeof(secret);
+    size_t derived_len = derive_shared_secret(localKey, peerKey, secret, secret_len);
+
+    fprintf(stderr, "Secret partagé calculé avec succès (%zu octets).\n", derived_len);
+    for (size_t i = 0; i < derived_len; i++) {
+        printf("%02X", secret[i]);
+    }
+    printf("\n\n\n");
+}
 void handle_list_command(const char * username) {
     char directory_name[1024];
     snprintf(directory_name, sizeof(directory_name), "files/%s", username);
@@ -170,6 +468,20 @@ void handle_list_command(const char * username) {
 
     printf("Contenu du répertoire '%s' :\n", directory_name);
 
+    // // Parcourt chaque entrée du répertoire
+    // while ((entry = readdir(dir)) != NULL) {
+    //     // Ignore les entrées spéciales "." et ".."
+    //     if (entry->d_name[0] == '.' && 
+    //        (entry->d_name[1] == '\0' || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
+    //         continue;
+    //     }
+
+    //     printf("- %s\n", entry->d_name); // Affiche le nom du fichier ou du dossier
+    // }
+    // Buffer pour stocker la réponse
+    char response[4096] = ""; 
+    size_t response_length = 0;
+
     // Parcourt chaque entrée du répertoire
     while ((entry = readdir(dir)) != NULL) {
         // Ignore les entrées spéciales "." et ".."
@@ -178,17 +490,54 @@ void handle_list_command(const char * username) {
             continue;
         }
 
-        printf("- %s\n", entry->d_name); // Affiche le nom du fichier ou du dossier
+        // Ajoute le nom du fichier ou du dossier au buffer
+        response_length += snprintf(response + response_length, 
+                                    sizeof(response) - response_length, 
+                                    "- %s\n", entry->d_name);
+
+        // Vérifie que le buffer n'est pas plein
+        if (response_length >= sizeof(response)) {
+            fprintf(stderr, "Buffer overflow: contenu du répertoire trop grand\n");
+            break;
+        }
+        
     }
+    send_message(response);
 
     closedir(dir); // Ferme le répertoire
 
 }
+void send_message(const char *message) {
+    // Check if the message is NULL
+    int clientPort = 54321;
 
+    if (message == NULL) {
+        fprintf(stderr, "Error: message is NULL.\n");
+        return;
+    }
+
+    // Check the message size
+    size_t message_length = strlen(message);
+    
+    // Create a buffer for the message
+    char buffer[4096] = {0};
+    strncpy(buffer, message, 4096 - 1); // Copy the message into the buffer (with null-termination)
+
+    // Send the message using sndmsg
+    int result = sndmsg(buffer, clientPort);
+
+    // Check the result of sndmsg
+    if (result == 0) {
+        printf("Message sent successfully to port %d.\n", clientPort);
+    } else {
+        fprintf(stderr, "Error: Failed to send message to port %d. sndmsg returned %d.\n", clientPort, result);
+    }
+}
 void handle_client_command(const char* command, const char* payload) {
     if (strcmp(command, "UPLOAD") == 0) {
-        printf("Commande UPLOAD reçue. Traitement du fichier %s\n", payload);
-        // a implémenter 
+        printf("Commande UPLOAD reçue. \n");
+        // necessite que le client soit enregistré auparavant
+        handle_upload_command(payload);
     } else if (strcmp(command, "LIST") == 0) {
         printf("Commande LIST reçue. Envoi de la liste des fichiers. %s\n", payload);
         handle_list_command(payload);
@@ -196,27 +545,38 @@ void handle_client_command(const char* command, const char* payload) {
     } else if (strcmp(command, "DOWNLOAD") == 0) {
         printf("Commande DOWNLOAD reçue. Envoi du fichier %s\n", payload);
         // a implémenter 
+        handle_download_command(payload);
     } else if (strcmp(command, "REGISTER") == 0) {
         printf("Commande REGISTER reçue.%s\n", payload);
         handle_register_command(payload, "login.txt");
-        // a implémenter 
     } else if (strcmp(command, "LOGIN") == 0) {
         printf("Commande LOGIN reçue. %s\n", payload);
         handle_login_command(payload, "login.txt");
-    }else {
+    } else if (strcmp(command, "ECDH") == 0) {
+        printf("Commande ECDH reçue. %s\n", payload);
+        handle_ecdh_command(payload);
+    } else {
         printf("Commande non reconnue : %s\n", command);
     }
 }
 
 int main() {
-    int port = 12345;
+    
     char buffer[MAX_BUFFER];
     
-    if (startserver(port) != 0) {
-        fprintf(stderr, "Erreur : impossible de démarrer le serveur sur le port %d\n", port);
+    if (startserver(serverPort) != 0) {
+        fprintf(stderr, "Erreur : impossible de démarrer le serveur sur le port %d\n", serverPort);
         return 1;
     }
-    printf("Serveur SecTrans démarré sur le port %d\n", port);
+    printf("Serveur SecTrans démarré sur le port %d\n", serverPort);
+
+    // Initialisation d'OpenSSL
+    OpenSSL_add_all_algorithms();
+    ERR_load_crypto_strings();
+
+    // Génération de la paire de clés locale
+    localKey = generate_local_key();
+    fprintf(stderr, "Clé locale générée avec succès.\n");
 
     while (1) {
         memset(buffer, 0, MAX_BUFFER);
@@ -252,17 +612,18 @@ int main() {
             printf("Signature : %s\n", encoded_signature);
             printf("Taille de la signature : %d\n", sig_len);
             printf("Payload : %s\n", payload);
-
+            
             /* if (!authenticate_client(token)) {
                 printf("Erreur : client non authentifié.\n");
                 continue;
             } */
-           char* decoded_signature = base64_decode(encoded_signature);
-           if (verify_signature(payload, (const char *) decoded_signature, sig_len, "public_key.pem") != 1)
-           {
+            size_t decoded_len = 0;
+            char* decoded_signature = base64_decode(encoded_signature, &decoded_len);
+            if (verify_signature(payload, (const char *) decoded_signature, sig_len, "public_key.pem") != 1)
+            {
                 fprintf(stderr, "Erreur lors de la verification de la signature du message.\n");
                 return 1;
-           }
+            }
             handle_client_command(command, payload);
         } else {
             printf("Aucun message reçu.\n");
