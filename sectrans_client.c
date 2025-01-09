@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 #include <openssl/ec.h>
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
@@ -18,6 +19,7 @@
 EVP_PKEY* localKey;
 EVP_PKEY* peerKey;
 unsigned char secret[32];
+bool is_logged = false;
 
 // Gérer les erreurs OpenSSL
 void handle_openssl_error() {
@@ -554,91 +556,136 @@ void handle_ecdh_command(const char* buffer){
     printf("\n\n\n");
 }
 
-int main(int argc, char* argv[]) {
-    if (argc < 3) {
-        fprintf(stderr, "Usage : %s -<option> <file>\n", argv[0]);
-        return 1;
-    }
+void make_ecdh(){
+    char bufferECDH[MAX_BUFFER];
+    char *encodedPubKey = encode_public_key(localKey);
+    printf("\n\nkeyy %s\n", encodedPubKey);
+    snprintf(bufferECDH, MAX_BUFFER, "ECDH %s", encodedPubKey);
+    sndmsg(bufferECDH, 12345),
 
-    int clientPort = 54321;
+    memset(bufferECDH, 0, MAX_BUFFER);
+    if(getmsg(bufferECDH) == 0){
+        handle_ecdh_command(bufferECDH);
+    }
+    getmsg(bufferECDH);
+
+}
+
+void print_usage() {
+    printf("Usage: %s -<option> <file>\n");
+    printf("Options:\n");
+    printf("  -up <file>        Upload a file to the server\n");
+    printf("  -list <username>  List files for the given username\n");
+    printf("  -down <file>      Download a file from the server\n");
+    printf("  -register <user> <password>  Register a new user\n");
+    printf("  -login <user> <password>     Login as an existing user\n");
+}
+
+void handle_input(int serverPort) {
+    char input[MAX_BUFFER];
     char buffer[MAX_BUFFER];
-    
-    if (startserver(clientPort) != 0) {
-        fprintf(stderr, "Erreur : impossible de démarrer le serveur sur le port %d\n", clientPort);
-        return 1;
-    }
-    printf("Client SecTrans démarré sur le port %d\n", clientPort);
 
-    // Initialisation d'OpenSSL
+    while (true) {
+        printf("\nEnter a command (-up, -list, -down, -register, -login, -help):\n> ");
+        if (fgets(input, sizeof(input), stdin) == NULL) {
+            printf("Exiting...\n");
+            break;
+        }
+
+        // Remove newline character
+        input[strcspn(input, "\n")] = 0;
+
+        // Parse the input
+        char *command = strtok(input, " ");
+        char *arg1 = strtok(NULL, " ");
+        char *arg2 = strtok(NULL, " ");
+
+        if (command == NULL) {
+            printf("Invalid command. -help for usage \n ");
+            continue;
+        }
+        if (strcmp(command, "-help") == 0){
+            print_usage();
+            continue;
+        }
+
+        if (strcmp(command, "-register") == 0 && arg1 && arg2) {
+            make_ecdh();
+            char hashed_password[65];
+            hash_password(arg2, hashed_password);
+            char logs[56];
+            snprintf(logs, sizeof(logs), "%s %s", arg1, hashed_password);
+            send_command("REGISTER", logs, serverPort);
+        } else if (strcmp(command, "-login") == 0 && arg1 && arg2) {
+            make_ecdh();
+            char hashed_password[65];
+            hash_password(arg2, hashed_password);
+            char logs[56];
+            snprintf(logs, sizeof(logs), "%s %s", arg1, hashed_password);
+            send_command("LOGIN", logs, serverPort);
+        } 
+        
+        if(!is_logged && strcmp(command, "-login") != 0 && strcmp(command, "-register") != 0){
+            printf("Veuillez vous identifier avec -login ou -register avant d'effectuer cette commande");
+            continue;
+        }
+        if (strcmp(command, "-up") == 0 && arg1) {
+            handle_upload_command("UPLOAD", arg1, serverPort);
+        } else if (strcmp(command, "-list") == 0 && arg1) {
+            send_command("LIST", arg1, serverPort);
+        } else if (strcmp(command, "-down") == 0 && arg1) {
+            send_command("DOWNLOAD", arg1, serverPort);
+        } else if (strcmp(command, "-login") != 0 && strcmp(command, "-register") != 0) {
+            printf("Invalid command.\n");
+            printf("Etes-vous log ? utilisez login ou register d'abord");
+            continue;
+        }
+
+        // Receive server response
+        memset(buffer, 0, MAX_BUFFER);
+        printf("Waiting for Server response...\n");
+        if (getmsg(buffer) == 0) {
+            printf("Server response:\n%s\n", buffer);
+            if (strcmp(buffer, "SUCCESS: Login successful") == 0){
+                is_logged = true;
+            }
+        }
+        printf("Reached the end of an interaction\n\n");
+
+    }
+}
+
+int main(int argc, char *argv[]) {
+    // if (argc < 3) {
+    //     print_usage(argv[0]);
+    //     return 1;
+    // }
+
+    // Initialize OpenSSL
     OpenSSL_add_all_algorithms();
     ERR_load_crypto_strings();
 
-    // Génération de la paire de clés locale
+    // Generate local key pair
     localKey = generate_local_key();
-    fprintf(stderr, "Clé locale générée avec succès.\n");
+    fprintf(stderr, "Local key generated successfully.\n");
 
-    const char* private_key_path = "private_key.pem";
-    const char* public_key_path = "public_key.pem";
+    const char *private_key_path = "private_key.pem";
+    const char *public_key_path = "public_key.pem";
 
     generate_rsa_keys(private_key_path, public_key_path);
 
     int serverPort = 12345;
+    int clientPort = 54321;
 
-    if (strcmp(argv[1], "-up") == 0 && argv[2]) {
-        handle_upload_command("UPLOAD", argv[2], serverPort);
-
-    } else if (strcmp(argv[1], "-list") == 0) {
-        send_command("LIST", "", serverPort);
-
-    } else if (strcmp(argv[1], "-down") == 0  && argv[2]) {
-        send_command("DOWNLOAD", argv[2], serverPort);
-
-    } else if (strcmp(argv[1], "-register") == 0 && argv[3]) {
-        char bufferECDH[MAX_BUFFER];
-        char *encodedPubKey = encode_public_key(localKey);
-        printf("\n\nkeyy %s\n", encodedPubKey);
-        snprintf(bufferECDH, MAX_BUFFER, "ECDH %s", encodedPubKey);
-        sndmsg(bufferECDH, serverPort),
-
-        memset(bufferECDH, 0, MAX_BUFFER);
-        if(getmsg(bufferECDH) == 0){
-            handle_ecdh_command(bufferECDH);
-        }
-        
-        char hashed_password[65];
-        hash_password(argv[3], hashed_password);
-        char logs[56];
-        snprintf(logs, sizeof(logs), "%s %s", argv[2], hashed_password);
-        send_command("REGISTER", logs, serverPort);
-
-    } else if (strcmp(argv[1], "-login") == 0 && argv[3]) {
-        char bufferECDH[MAX_BUFFER];
-        char *encodedPubKey = encode_public_key(localKey);
-        printf("\n\nkeyy %s\n", encodedPubKey);
-        snprintf(bufferECDH, MAX_BUFFER, "ECDH %s", encodedPubKey);
-        sndmsg(bufferECDH, serverPort),
-
-        memset(bufferECDH, 0, MAX_BUFFER);
-        if(getmsg(bufferECDH) == 0){
-            handle_ecdh_command(bufferECDH);
-        }
-        char hashed_password[65];
-        hash_password(argv[3], hashed_password);
-        char logs[56];
-        snprintf(logs, sizeof(logs), "%s %s", argv[2], hashed_password);
-        send_command("LOGIN", logs, serverPort);
-
-    } else {
-        fprintf(stderr, "Option invalide : %s\n", argv[1]);
+    if (startserver(clientPort) != 0) {
+        fprintf(stderr, "Error: Unable to start the server on port %d\n", clientPort);
         return 1;
     }
+    printf("Client SecTrans started on port %d\n", clientPort);
 
-    while (1) {
-        memset(buffer, 0, MAX_BUFFER);
-        if (getmsg(buffer) == 0) {
-            printf("Message reçu : %s\n\n", buffer);
-        }
-    }
+    
+    handle_input(serverPort);
 
     return 0;
 }
+
