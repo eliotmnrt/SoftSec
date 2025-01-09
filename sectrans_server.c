@@ -143,16 +143,45 @@ char* encode_public_key(EVP_PKEY* pkey) {
     }
 
     // Encoder la clé publique en base64
-    printf("clé pub");
+    printf("clé pub : ");
     for (size_t i = 0; i < pubkey_der_len; i++) {
         printf("%02X", pubkey_der[i]);
     }
+    printf("\n");
     char* encoded_key = base64_encode(pubkey_der, pubkey_der_len);
     OPENSSL_free(pubkey_der);
     EC_KEY_free(ec_key);
 
     return encoded_key;
 }
+
+void send_message_to_client(const char *message) {
+    // Check if the message is NULL
+    int clientPort = 54321;
+
+    if (message == NULL) {
+        fprintf(stderr, "Error: message is NULL.\n");
+        return;
+    }
+
+    // Check the message size
+    size_t message_length = strlen(message);
+    
+    // Create a buffer for the message
+    char buffer[4096] = {0};
+    strncpy(buffer, message, 4096 - 1); // Copy the message into the buffer (with null-termination)
+
+    // Send the message using sndmsg
+    int result = sndmsg(buffer, clientPort);
+
+    // Check the result of sndmsg
+    if (result == 0) {
+        printf("Message sent successfully to port %d.\n", clientPort);
+    } else {
+        fprintf(stderr, "Error: Failed to send message to port %d. sndmsg returned %d.\n", clientPort, result);
+    }
+}
+
 
 int authenticate_user(const char* username, const char* hashed_password, const char * fileName) {
 
@@ -253,6 +282,35 @@ int verify_signature(const char* message, const char* signature, size_t sig_len,
     return result == 1; // Retourne 1 si la signature est valide
 }
 
+
+int decrypt_message(const unsigned char* ciphertext, int ciphertext_len, const unsigned char* key, const unsigned char* iv, unsigned char* plaintext) {
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return 0;
+
+    int len;
+    int plaintext_len;
+
+    if (1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv)) {
+        EVP_CIPHER_CTX_free(ctx);
+        return 0;
+    }
+
+    if (1 != EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len)) {
+        EVP_CIPHER_CTX_free(ctx);
+        return 0;
+    }
+    plaintext_len = len;
+
+    if (1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len)) {
+        EVP_CIPHER_CTX_free(ctx);
+        return 0;
+    }
+    plaintext_len += len;
+
+    plaintext[plaintext_len] = '\0'; // Null-terminate plaintext
+    EVP_CIPHER_CTX_free(ctx);
+    return plaintext_len;
+}
 
 
 #define MAX_FILE_SIZE (900)
@@ -450,12 +508,12 @@ void handle_ecdh_command(const char* buffer){
 
     if (!decodedKey) {
         fprintf(stderr, "Erreur : Décodage Base64 échoué.\n");
-        send_message_to_client('Error: Décodage Base64 échoué ');
+        send_message_to_client("Error: Décodage Base64 échoué ");
         exit(1);
     }
-    printf("key size %d", decoded_len);
+    printf("key size %d\n", decoded_len);
     printf("Clé décodée (en hexadécimal) :\n");
-    for (size_t i = 0; i < sizeof(decodedKey); i++) {
+    for (size_t i = 0; i < decoded_len; i++) {
         printf("%02X", decodedKey[i]);
     }
     printf("\n");
@@ -524,32 +582,8 @@ void handle_list_command(const char * username) {
     closedir(dir); // Ferme le répertoire
 
 }
-void send_message_to_client(const char *message) {
-    // Check if the message is NULL
-    int clientPort = 54321;
 
-    if (message == NULL) {
-        fprintf(stderr, "Error: message is NULL.\n");
-        return;
-    }
 
-    // Check the message size
-    size_t message_length = strlen(message);
-    
-    // Create a buffer for the message
-    char buffer[4096] = {0};
-    strncpy(buffer, message, 4096 - 1); // Copy the message into the buffer (with null-termination)
-
-    // Send the message using sndmsg
-    int result = sndmsg(buffer, clientPort);
-
-    // Check the result of sndmsg
-    if (result == 0) {
-        printf("Message sent successfully to port %d.\n", clientPort);
-    } else {
-        fprintf(stderr, "Error: Failed to send message to port %d. sndmsg returned %d.\n", clientPort, result);
-    }
-}
 void handle_client_command(const char* command, const char* payload) {
     if (strcmp(command, "UPLOAD") == 0) {
         printf("Commande UPLOAD reçue. \n");
@@ -561,7 +595,6 @@ void handle_client_command(const char* command, const char* payload) {
         // a implémenter 
     } else if (strcmp(command, "DOWNLOAD") == 0) {
         printf("Commande DOWNLOAD reçue. Envoi du fichier %s\n", payload);
-        // a implémenter 
         handle_download_command(payload);
     } else if (strcmp(command, "REGISTER") == 0) {
         printf("Commande REGISTER reçue.%s\n", payload);
@@ -604,12 +637,24 @@ int main() {
             char command[32], payload[MAX_BUFFER];
             char encoded_signature[512];
             int sig_len = 0;
+            char encodedIv[25];
 
             char* token = strtok(buffer, " "); // Extraire la commande
             if (token) {
                 strncpy(command, token, sizeof(command));
                 command[sizeof(command) - 1] = '\0'; 
             }
+
+            if (strcmp(command, "ECDH") == 0){
+                token = strtok(NULL, "\n"); // Extraire le payload
+                if (token) {
+                    strncpy(payload, token, sizeof(payload));
+                    payload[sizeof(payload) - 1] = '\0';
+                }
+                printf("payload : %s\n", payload);
+                handle_ecdh_command(payload);
+            }
+
             token = strtok(NULL, " ");  // Extraire la signature
             if (token) {
                 strncpy(encoded_signature, token, sizeof(encoded_signature));
@@ -618,6 +663,11 @@ int main() {
             token = strtok(NULL, " "); // Extraire sig_len
             if (token) {
                 sig_len = atoi(token); 
+            }
+            token = strtok(NULL, " "); // Extraire le payload
+            if (token) {
+                strncpy(encodedIv, token, sizeof(encodedIv));
+                encodedIv[sizeof(encodedIv) - 1] = '\0';
             }
             token = strtok(NULL, "\n"); // Extraire le payload
             if (token) {
@@ -628,18 +678,29 @@ int main() {
             printf("Commande : %s\n", command);
             printf("Signature : %s\n", encoded_signature);
             printf("Taille de la signature : %d\n", sig_len);
+            printf("encoded iv : %s\n", encodedIv);
             printf("Payload : %s\n", payload);
             
-            /* if (!authenticate_client(token)) {
-                printf("Erreur : client non authentifié.\n");
-                continue;
-            } */
-            size_t decoded_len = 0;
-            char* decoded_signature = base64_decode(encoded_signature, &decoded_len);
-            if (verify_signature(payload, (const char *) decoded_signature, sig_len, "public_key.pem") != 1)
-            {
-                fprintf(stderr, "Erreur lors de la verification de la signature du message.\n");
-                return 1;
+
+            if (strcmp(command, "ECDH") != 0){
+                
+                size_t decoded_payload_len = 0;
+                char * decoded_payload = base64_decode(payload, &decoded_payload_len);
+                printf("decoded payload : %s\n", decoded_payload);
+                size_t decoded_sig_len = 0;
+                char* decoded_signature = base64_decode(encoded_signature, &decoded_sig_len);
+
+                size_t decoded_iv_len = 0;
+                unsigned char* iv = base64_decode(encodedIv, &decoded_iv_len);
+
+                decrypt_message(decoded_payload, decoded_payload_len, secret, iv, payload);
+
+                if (verify_signature(payload, (const char *) decoded_signature, sig_len, "public_key.pem") != 1)
+                {
+                    fprintf(stderr, "Erreur lors de la verification de la signature du message.\n");
+                    return 1;
+                }
+                printf("payload : %s\n", payload);
             }
             handle_client_command(command, payload);
         } else {
