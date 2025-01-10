@@ -556,6 +556,7 @@ void handle_list_command(const char * username) {
     printf("Contenu du répertoire '%s' :\n", directory_name);
     char response[4096] = ""; 
     size_t response_length = 0;
+    int is_empty=1;
 
     // Parcourt chaque entrée du répertoire
     while ((entry = readdir(dir)) != NULL) {
@@ -564,6 +565,7 @@ void handle_list_command(const char * username) {
            (entry->d_name[1] == '\0' || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
             continue;
         }
+        is_empty=0; // si une entrée est trouvée, le répertoire n'est pas vide
 
         // Ajoute le nom du fichier ou du dossier au buffer
         response_length += snprintf(response + response_length, 
@@ -574,8 +576,11 @@ void handle_list_command(const char * username) {
         if (response_length >= sizeof(response)) {
             fprintf(stderr, "Buffer overflow: contenu du répertoire trop grand\n");
             break;
-        }
-        
+        } 
+    }
+    if(is_empty){
+        strncpy(response, "Dossier vide\n", sizeof(response)-1);
+        response[sizeof(response)-1] = '\0'; 
     }
     send_message_to_client(response);
 

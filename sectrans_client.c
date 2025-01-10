@@ -650,7 +650,6 @@ void handle_input(int serverPort) {
                 is_logged = true;
             }
         }
-        printf("Reached the end of an interaction\n\n");
 
     }
 }
@@ -661,7 +660,7 @@ int main(int argc, char *argv[]) {
     //     return 1;
     // }
 
-    // Initialize OpenSSL
+    //  Initialize OpenSSL
     OpenSSL_add_all_algorithms();
     ERR_load_crypto_strings();
 
