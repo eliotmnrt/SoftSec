@@ -410,26 +410,30 @@ char* prepare_payload(const char* filename) {
     return payload;
 }
 
-void handle_upload_command(const char* command, char* filename, int port){
+bool handle_upload_command(const char* command, char* filename, int port){
     char buffer[MAX_BUFFER];
 
     unsigned char signature[256];
     unsigned int sig_len;
 
     char * payload = prepare_payload(filename);
+    if(!payload){
+        printf("invalid payload");
+        return false;
+    }
 
 // Génération d'un IV aléatoire
     unsigned char iv[AES_BLOCK_SIZE];
     if (!RAND_bytes(iv, AES_BLOCK_SIZE)) {
         fprintf(stderr, "Erreur : impossible de générer l'IV.\n");
-        return;
+        return false;
     }
     
 
     // Signature du message chiffré
     if (!sign_message((char*)payload, "private_key.pem", signature, &sig_len)) {
         fprintf(stderr, "Erreur lors de la signature du message.\n");
-        return;
+        return false;
     }
 
     // Chiffrement du message (payload)
@@ -437,7 +441,7 @@ void handle_upload_command(const char* command, char* filename, int port){
     int ciphertext_len;
     if (!encrypt_message(payload, secret, iv, ciphertext, &ciphertext_len)) {
         fprintf(stderr, "Erreur : échec du chiffrement du message.\n");
-        return;
+        return false;
     }
 
     
@@ -463,8 +467,10 @@ void handle_upload_command(const char* command, char* filename, int port){
     // Envoi du message
     if (sndmsg(buffer, port) == 0) {
         printf("Commande envoyée : %s\n", buffer);
+        return true;
     } else {
         fprintf(stderr, "Erreur : échec de l'envoi de la commande.\n");
+        return false;
     }
 }
 
@@ -715,7 +721,8 @@ void handle_input(int serverPort) {
             continue;
         }
         if (strcmp(command, "-up") == 0 && arg1) {
-            handle_upload_command("UPLOAD", arg1, serverPort);
+            bool uploaded= handle_upload_command("UPLOAD", arg1, serverPort);
+            if (!uploaded) continue;
         } else if (strcmp(command, "-list") == 0 && arg1) {
             send_command("LIST", arg1, serverPort);
         } else if (strcmp(command, "-down") == 0 && arg1) {
