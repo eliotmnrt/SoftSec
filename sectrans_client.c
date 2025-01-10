@@ -21,6 +21,7 @@ EVP_PKEY* localKey;
 EVP_PKEY* peerKey;
 unsigned char secret[32];
 bool is_logged = false;
+char * current_user = NULL;
 
 // Gérer les erreurs OpenSSL
 void handle_openssl_error() {
@@ -639,18 +640,8 @@ bool validate_command(const char *command, const char *arg1, const char *arg2){
         }
         return true;
     } else if (strcmp(command, "-list")==0){
-        // Vérifie qu'il y a un argument
-        if (!arg1) {
-            printf("Erreur : Nom d'utilisateur manquant pour -list.\n");
-            return false;
-        }
-        if(arg2){
-            printf("invalid number of args");
-            return false;
-        }
-        // Valide le format du nom d'utilisateur
-        if (!validate_argument(arg1, userPattern)) {
-            printf("Erreur : Nom d'utilisateur invalide.\n");
+        if (arg1 || arg2) {
+            printf("Erreur: No args for -list.\n");
             return false;
         }
         return true;
@@ -723,8 +714,12 @@ void handle_input(int serverPort) {
         if (strcmp(command, "-up") == 0 && arg1) {
             bool uploaded= handle_upload_command("UPLOAD", arg1, serverPort);
             if (!uploaded) continue;
-        } else if (strcmp(command, "-list") == 0 && arg1) {
-            send_command("LIST", arg1, serverPort);
+        } else if (strcmp(command, "-list") == 0 && !arg1) {
+            if (!current_user){
+                printf(" no user logged");
+                continue;
+            }
+            send_command("LIST", current_user , serverPort);
         } else if (strcmp(command, "-down") == 0 && arg1) {
             send_command("DOWNLOAD", arg1, serverPort);
         } else if (strcmp(command, "-login") != 0 && strcmp(command, "-register") != 0) {
@@ -740,6 +735,9 @@ void handle_input(int serverPort) {
             printf("Server response:\n%s\n", buffer);
             if (strcmp(buffer, "SUCCESS: Login successful") == 0){
                 is_logged = true;
+                current_user= arg1;
+                printf("CURRENT LOGGED USER: %s", current_user);
+
             }
         }
 
