@@ -317,44 +317,72 @@ int decrypt_message(const unsigned char* ciphertext, int ciphertext_len, const u
 
 
 void handle_upload_command(const char* payload) {
-    char filename[256];
-    const char* file_content = strchr(payload, ' '); // Trouve le séparateur
-    if (!file_content) {
+    char filename[256], username[256];
+
+    const char* file_content;
+    // EXTRACTION DU USERNAME
+    const char* first_space = strchr(payload, ' ');
+    if (!first_space) {
         printf("ERROR: Format de payload invalide pour UPLOAD\n");
         send_message_to_client("ERROR: Format de payload invalide pour UPLOAD");
         return;
     }
-    size_t filename_length = file_content - payload;
+    size_t username_length = first_space - payload;
+    strncpy(username, payload, username_length);
+    username[username_length] = '\0';
+    printf("USERNAME: %s", username);
+    
+    // Extraction du nom de fichier FILENAME
+    const char * second_space = strchr(first_space+1, ' ');
+    if (!second_space) {
+        printf("ERROR: Format de payload invalide pour UPLOAD\n");
+        send_message_to_client("ERROR: Format de payload invalide pour UPLOAD");
+        return;
+    }
+    size_t filename_length = second_space - (first_space + 1);
+
+
     if (filename_length >= sizeof(filename)) {
         printf("ERROR: Nom de fichier trop long\n");
         send_message_to_client("ERROR: Nom de fichier trop long");
         return;
     }
-    strncpy(filename, payload, filename_length);
-    filename[filename_length] = '\0'; // Null-terminate le nom du fichier
-    // Vérification de sécurité sur le nom du fichier
+    strncpy(filename, first_space + 1, filename_length);
+    filename[filename_length] = '\0';
+
+    printf("FILENAME: %s\n", filename);
 
 
-    file_content++; // Avance pour pointer après l'espace
+
+    // Extraction du contenu du fichier (FILE CONTENT)
+    file_content = second_space + 1;
     size_t content_length = strlen(file_content);
 
-    // Vérification de la taille du fichier
+
+    
+    if (!file_content) {
+        printf("ERROR: Format de payload invalide pour UPLOAD\n");
+        send_message_to_client("ERROR: Format de payload invalide pour UPLOAD");
+        return;
+    }
     if (content_length > MAX_FILE_SIZE) {
         printf("ERROR: Fichier trop volumineux (%zu octets)\n", content_length);
         send_message_to_client("ERROR: Fichier trop volumineux");
         return;
     }
-    // Optionnel : Vérifier le type de contenu (si attendu comme texte ou binaire)
-    // Exemple : Rejet si fichier contient des caractères non-ASCII
     for (size_t i = 0; i < content_length; i++) {
         if (file_content[i] < 32 && file_content[i] != '\n' && file_content[i] != '\r' && file_content[i] != '\t') {
             printf("ERROR: Contenu du fichier non valide (caractère binaire détecté)\n");
+            send_message_to_client("ERROR: Contenu du fichier non valide");
+            return;
         }
     }
-    
+
+    printf("file content: %s\n", file_content);
+
     // Écriture du fichier sur le serveur
     char path[512];
-    snprintf(path, sizeof(path), "./files/test/%s", filename);
+    snprintf(path, sizeof(path), "./files/%s/%s", username, filename);
     FILE* file = fopen(path, "w");
     if (!file) {
         perror("ERROR: Impossible de créer le fichier sur le serveur");
@@ -369,9 +397,20 @@ void handle_upload_command(const char* payload) {
 }
 
 
-void handle_download_command(const char* filename) {
-    char filepath[512] = "./files/test/"; // Dossier contenant les fichiers
-    strcat(filepath, filename);      // Chemin complet du fichier
+void handle_download_command(const char* payload) {
+    char filename[256], username[256];
+    // Extract `username` and `filename` from the payload
+    if (sscanf(payload, "%s %s", username, filename) != 2) {
+        printf("ERROR: Payload format incorrect: %s\n", payload);
+        send_message_to_client("ERROR: Format de payload invalide");
+        return;
+    }
+
+    // Construct the file path with username directory
+    char filepath[512] = "./files/";
+    strcat(filepath, username);    // Append username
+    strcat(filepath, "/");         // Add trailing slash
+    strcat(filepath, filename);    // Append the filename
 
     // Vérification du nom du fichier (évite les attaques par parcours de répertoires)
     if (strstr(filename, "../") || strchr(filename, '/') || strchr(filename, '\\')) {
@@ -426,6 +465,7 @@ void handle_download_command(const char* filename) {
     // Envoyer le contenu au client (simulé ici avec un affichage)
     printf("SUCCESS: Fichier '%s' téléchargé (%ld octets)\n", filename, file_size);
     printf("Contenu du fichier :\n%s\n", file_content);
+    send_message_to_client(file_content);
 
     free(file_content);
 }
@@ -556,6 +596,7 @@ void handle_list_command(const char * username) {
     printf("Contenu du répertoire '%s' :\n", directory_name);
     char response[4096] = ""; 
     size_t response_length = 0;
+    int is_empty=1;
 
     // Parcourt chaque entrée du répertoire
     while ((entry = readdir(dir)) != NULL) {
@@ -564,6 +605,7 @@ void handle_list_command(const char * username) {
            (entry->d_name[1] == '\0' || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
             continue;
         }
+        is_empty=0; // si une entrée est trouvée, le répertoire n'est pas vide
 
         // Ajoute le nom du fichier ou du dossier au buffer
         response_length += snprintf(response + response_length, 
@@ -574,8 +616,11 @@ void handle_list_command(const char * username) {
         if (response_length >= sizeof(response)) {
             fprintf(stderr, "Buffer overflow: contenu du répertoire trop grand\n");
             break;
-        }
-        
+        } 
+    }
+    if(is_empty){
+        strncpy(response, "Dossier vide\n", sizeof(response)-1);
+        response[sizeof(response)-1] = '\0'; 
     }
     send_message_to_client(response);
 
@@ -652,6 +697,7 @@ int main() {
                     payload[sizeof(payload) - 1] = '\0';
                 }
                 printf("payload : %s\n", payload);
+                
                 handle_ecdh_command(payload);
             }
 

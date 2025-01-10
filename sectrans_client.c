@@ -12,6 +12,7 @@
 #include <openssl/err.h>
 #include <openssl/aes.h>
 #include <openssl/rand.h>
+#include <regex.h>
 
 
 #define MAX_BUFFER 1024
@@ -20,6 +21,7 @@ EVP_PKEY* localKey;
 EVP_PKEY* peerKey;
 unsigned char secret[32];
 bool is_logged = false;
+char current_user[256] = ""; 
 
 // Gérer les erreurs OpenSSL
 void handle_openssl_error() {
@@ -274,11 +276,6 @@ char* encode_public_key(EVP_PKEY* pkey) {
         return NULL;
     }
 
-    // Encoder la clé publique en base64
-    printf("clé pub");
-    for (size_t i = 0; i < pubkey_der_len; i++) {
-        printf("%02X", pubkey_der[i]);
-    }
     char* encoded_key = base64_encode(pubkey_der, pubkey_der_len);
     OPENSSL_free(pubkey_der);
     EC_KEY_free(ec_key);
@@ -384,16 +381,15 @@ char* load_file(const char* filename, size_t* file_size) {
 }
 
 
-char* prepare_payload(const char* filename) {
+char* prepare_payload(const char *user, char* filename) {
     size_t file_size;
     char* file_content = load_file(filename, &file_size);
-    printf("\n\nfile %s\n", file_content);
     if (!file_content) {
         return NULL;
     }
 
     // Allouer suffisamment d'espace pour le payload
-    size_t payload_size = strlen(filename) + 1 + file_size + 2;
+    size_t payload_size = strlen(user) + 2 + strlen(filename) + 1 + file_size + 2;
     char* payload = (char*)malloc(payload_size);
     if (!payload) {
         perror("ERROR: Allocation mémoire échouée pour le payload");
@@ -402,33 +398,37 @@ char* prepare_payload(const char* filename) {
     }
 
     // Construire le payload : <filename> <file_content>
-    snprintf(payload, payload_size, "%s %s", filename, file_content);
-    printf("\n\nfile %s\n", payload);
+    snprintf(payload, payload_size, "%s %s %s", user, filename, file_content);
     free(file_content);
 
     return payload;
 }
 
-void handle_upload_command(const char* command, char* filename, int port){
+bool handle_upload_command(const char* command, char* filename, int port){
     char buffer[MAX_BUFFER];
 
     unsigned char signature[256];
     unsigned int sig_len;
 
-    char * payload = prepare_payload(filename);
+    char * payload = prepare_payload(current_user, filename);
+    
+    if(!payload){
+        printf("invalid payload");
+        return false;
+    }
 
 // Génération d'un IV aléatoire
     unsigned char iv[AES_BLOCK_SIZE];
     if (!RAND_bytes(iv, AES_BLOCK_SIZE)) {
         fprintf(stderr, "Erreur : impossible de générer l'IV.\n");
-        return;
+        return false;
     }
     
 
     // Signature du message chiffré
     if (!sign_message((char*)payload, "private_key.pem", signature, &sig_len)) {
         fprintf(stderr, "Erreur lors de la signature du message.\n");
-        return;
+        return false;
     }
 
     // Chiffrement du message (payload)
@@ -436,7 +436,7 @@ void handle_upload_command(const char* command, char* filename, int port){
     int ciphertext_len;
     if (!encrypt_message(payload, secret, iv, ciphertext, &ciphertext_len)) {
         fprintf(stderr, "Erreur : échec du chiffrement du message.\n");
-        return;
+        return false;
     }
 
     
@@ -446,24 +446,18 @@ void handle_upload_command(const char* command, char* filename, int port){
     char* encoded_ciphertext = base64_encode(ciphertext, ciphertext_len);
     char* encoded_iv = base64_encode(iv, AES_BLOCK_SIZE);
 
-    printf("iv : ");
-    for (int i=0; i<16; i++){
-        printf("%d", encoded_iv[i]);
-    }
-    printf("\n");
-    printf("Message : %s\n", payload);
-    printf("Message chiffré : %s\n", ciphertext);
-    printf("Message chiffré (base64) : %s\n", encoded_ciphertext);
-    printf("IV (base64) : %s\n", encoded_iv);
-
+ 
     // Création du buffer pour l'envoi
     snprintf(buffer, MAX_BUFFER, "%s %s %d %s %s", command, encoded_signature, sig_len, encoded_iv, encoded_ciphertext);
 
     // Envoi du message
     if (sndmsg(buffer, port) == 0) {
-        printf("Commande envoyée : %s\n", buffer);
+        // printf("Commande envoyée : %s\n", buffer);
+        printf("Commande envoyée avec succès \n");
+        return true;
     } else {
         fprintf(stderr, "Erreur : échec de l'envoi de la commande.\n");
+        return false;
     }
 }
 
@@ -504,22 +498,23 @@ void send_command(const char* command, char* payload, int port) {
     char* encoded_ciphertext = base64_encode(ciphertext, ciphertext_len);
     char* encoded_iv = base64_encode(iv, AES_BLOCK_SIZE);
 
-    printf("iv : ");
-    for (int i=0; i<16; i++){
-        printf("%d", encoded_iv[i]);
-    }
-    printf("\n");
-    printf("Message : %s\n", payload);
-    printf("Message chiffré : %s\n", ciphertext);
-    printf("Message chiffré (base64) : %s\n", encoded_ciphertext);
-    printf("IV (base64) : %s\n", encoded_iv);
+    // printf("iv : ");
+    // for (int i=0; i<16; i++){
+    //     printf("%d", encoded_iv[i]);
+    // }
+    // printf("\n");
+    // printf("Message : %s\n", payload);
+    // printf("Message chiffré : %s\n", ciphertext);
+    // printf("Message chiffré (base64) : %s\n", encoded_ciphertext);
+    // printf("IV (base64) : %s\n", encoded_iv);
 
     // Création du buffer pour l'envoi
     snprintf(buffer, MAX_BUFFER, "%s %s %d %s %s", command, encoded_signature, sig_len, encoded_iv, encoded_ciphertext);
 
     // Envoi du message
     if (sndmsg(buffer, port) == 0) {
-        printf("Commande envoyée : %s\n", buffer);
+        // printf("Commande envoyée : %s\n", buffer);
+        printf("Commande envoyée avec succès\n");
     } else {
         fprintf(stderr, "Erreur : échec de l'envoi de la commande.\n");
     }
@@ -533,12 +528,12 @@ void handle_ecdh_command(const char* buffer){
         fprintf(stderr, "Erreur : Décodage Base64 échoué.\n");
         exit(1);
     }
-    printf("key size %d", decoded_len);
-    printf("Clé décodée (en hexadécimal) :\n");
-    for (size_t i = 0; i < decoded_len; i++) {
-        printf("%02X", decodedKey[i]);
-    }
-    printf("\n");
+    // printf("key size %d", decoded_len);
+    // printf("Clé décodée (en hexadécimal) :\n");
+    // for (size_t i = 0; i < decoded_len; i++) {
+    //     printf("%02X", decodedKey[i]);
+    // }
+    // printf("\n");
     peerKey = decode_peer_public_key(decodedKey, decoded_len);
     if (!peerKey) {
         printf("Erreur : Échec du traitement de la clé publique distante\n");
@@ -549,17 +544,17 @@ void handle_ecdh_command(const char* buffer){
     size_t secret_len = sizeof(secret);
     size_t derived_len = derive_shared_secret(localKey, peerKey, secret, secret_len);
 
-    fprintf(stderr, "Secret partagé calculé avec succès (%zu octets).\n", derived_len);
-    for (size_t i = 0; i < derived_len; i++) {
-        printf("%02X", secret[i]);
-    }
-    printf("\n\n\n");
+    // fprintf(stderr, "Secret partagé calculé avec succès (%zu octets).\n", derived_len);
+    // for (size_t i = 0; i < derived_len; i++) {
+    //     printf("%02X", secret[i]);
+    // }
+    // printf("\n\n\n");
 }
 
 void make_ecdh(){
     char bufferECDH[MAX_BUFFER];
     char *encodedPubKey = encode_public_key(localKey);
-    printf("\n\nkeyy %s\n", encodedPubKey);
+    // printf("\n\nkeyy %s\n", encodedPubKey);
     snprintf(bufferECDH, MAX_BUFFER, "ECDH %s", encodedPubKey);
     sndmsg(bufferECDH, 12345),
 
@@ -580,7 +575,93 @@ void print_usage() {
     printf("  -register <user> <password>  Register a new user\n");
     printf("  -login <user> <password>     Login as an existing user\n");
 }
+bool validate_argument(const char *arg, const char* pattern){
+    regex_t regex;
+    int ret;
+    ret=regcomp(&regex, pattern, REG_EXTENDED);
+    if(ret){
+        fprintf(stderr, "Erreur lors de la compilation de la regex\n");
+        return false;
+    }
+    // Vérifier si l'arg correspond au pattern
+    ret = regexec(&regex, arg, 0, NULL, 0);
+    regfree(&regex);
+    return ret==0;
+}
 
+bool validate_command(const char *command, const char *arg1, const char *arg2){
+    const char * userPattern = "^[a-zA-Z0-9_]{3,20}$";
+    const char * mdpPattern = "^[a-zA-Z0-9@#$^&+=]{4,20}$";
+    if(strcmp(command,"-register")==0 || strcmp(command, "-login")==0){
+        //Vérifier si aucun des deux arguments n'est nul
+        if(!arg2 || !arg2){
+            printf("ERROR: Nom d'utilisateur ou mot de passe manquant.\n");
+            return false;
+        }
+        // pour user: chiffre et lettres entre 3 et 2O char autorisées
+        // pour mdp: chiffre et lettrer et quelque char spéciaux entre 5 et 2O autorisées
+        
+
+        if (!validate_argument(arg1, userPattern) || !validate_argument(arg2, mdpPattern)){
+            printf("ERROR: Format invalide pour le nom d'utilisateur ou le mot de passe.\n");
+            return false;
+
+        }
+        return true;
+    } else if (strcmp(command, "-up") == 0) {
+        // Vérifie qu'il y a un argument
+        if (!arg1) {
+            printf("Erreur : Nom du fichier manquant.\n");
+            return false;
+        }
+        if(arg2){
+            printf("invalid number of args");
+            return false;
+        }
+
+        // Valide le format du chemin de fichier
+        // les / ne sont pas autorisés pour pas changer de dossier
+        if (!validate_argument(arg1, "^[a-zA-Z0-9._/-]+$")) {
+            printf("Erreur : Nom du fichier invalid.\n");
+            return false;
+        }
+        return true;
+    } else if (strcmp(command, "-down") == 0) {
+        // Vérifie qu'il y a un argument
+        if (!arg1) {
+            printf("Erreur : Nom du fichier manquant.\n");
+            return false;
+        }
+        if(arg2){
+            printf("invalid number of args");
+            return false;
+        }
+
+        // Valide le format du chemin de fichier
+        // les / ne sont pas autorisés pour pas changer de dossier
+        if (!validate_argument(arg1, "^[a-zA-Z0-9._-]+$") || (strstr(arg1, ".."))!=NULL) {
+            printf("Erreur : Nom du fichier invalid.\n");
+            return false;
+        }
+        return true;
+        }
+    else if (strcmp(command, "-list")==0){
+        if (arg1 || arg2) {
+            printf("Erreur: No args for -list.\n");
+            return false;
+        }
+        return true;
+    } else if (strcmp(command, "-help")==0){
+        // Vérifie qu'il y a un argument
+        if (arg1 || arg2) {
+            printf("Erreur: No args for help.\n");
+            return false;
+        }
+        return true;
+        
+    }
+    
+}
 void handle_input(int serverPort) {
     char input[MAX_BUFFER];
     char buffer[MAX_BUFFER];
@@ -604,6 +685,13 @@ void handle_input(int serverPort) {
             printf("Invalid command. -help for usage \n ");
             continue;
         }
+        // Vérifier si la commande est valide:
+        if(!validate_command(command, arg1, arg2)){
+            printf("invalid command, -help for usage \n");
+            continue;
+        }
+
+        //Gestion des command
         if (strcmp(command, "-help") == 0){
             print_usage();
             continue;
@@ -630,11 +718,15 @@ void handle_input(int serverPort) {
             continue;
         }
         if (strcmp(command, "-up") == 0 && arg1) {
-            handle_upload_command("UPLOAD", arg1, serverPort);
-        } else if (strcmp(command, "-list") == 0 && arg1) {
-            send_command("LIST", arg1, serverPort);
+            bool uploaded= handle_upload_command("UPLOAD", arg1, serverPort);
+            if (!uploaded) continue;
+        } else if (strcmp(command, "-list") == 0 && !arg1) {
+            send_command("LIST", current_user , serverPort);
         } else if (strcmp(command, "-down") == 0 && arg1) {
-            send_command("DOWNLOAD", arg1, serverPort);
+            char payload[256]; // Adjust size as necessary
+            snprintf(payload, sizeof(payload), "%s %s", current_user, arg1);
+            printf("payload for down: %s", payload);
+            send_command("DOWNLOAD", payload, serverPort);
         } else if (strcmp(command, "-login") != 0 && strcmp(command, "-register") != 0) {
             printf("Invalid command.\n");
             printf("Etes-vous log ? utilisez login ou register d'abord");
@@ -646,22 +738,18 @@ void handle_input(int serverPort) {
         printf("Waiting for Server response...\n");
         if (getmsg(buffer) == 0) {
             printf("Server response:\n%s\n", buffer);
-            if (strcmp(buffer, "SUCCESS: Login successful") == 0){
+            if (strcmp(buffer, "SUCCESS: Login successful") == 0 && strcmp(command, "-login") == 0){
                 is_logged = true;
+                strncpy(current_user, arg1, sizeof(current_user) - 1);
+                current_user[sizeof(current_user) - 1] = '\0'; // Null-terminate
             }
         }
-        printf("Reached the end of an interaction\n\n");
 
     }
 }
 
 int main(int argc, char *argv[]) {
-    // if (argc < 3) {
-    //     print_usage(argv[0]);
-    //     return 1;
-    // }
-
-    // Initialize OpenSSL
+    //  Initialize OpenSSL
     OpenSSL_add_all_algorithms();
     ERR_load_crypto_strings();
 
