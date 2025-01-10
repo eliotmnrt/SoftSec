@@ -317,44 +317,67 @@ int decrypt_message(const unsigned char* ciphertext, int ciphertext_len, const u
 
 
 void handle_upload_command(const char* payload) {
-    char filename[256];
-    const char* file_content = strchr(payload, ' '); // Trouve le séparateur
-    if (!file_content) {
+    char filename[256], username[256];
+
+    const char* file_content;
+    // EXTRACTION DU USERNAME
+    const char* first_space = strchr(payload, ' ');
+    if (!first_space) {
         printf("ERROR: Format de payload invalide pour UPLOAD\n");
         send_message_to_client("ERROR: Format de payload invalide pour UPLOAD");
         return;
     }
-    size_t filename_length = file_content - payload;
+    size_t username_length = first_space - payload;
+    strncpy(username, payload, username_length);
+    username[username_length] = '\0';
+
+    
+    // Extraction du nom de fichier FILENAME
+    const char * second_space = strchr(first_space+1, ' ');
+    if (!second_space) {
+        printf("ERROR: Format de payload invalide pour UPLOAD\n");
+        send_message_to_client("ERROR: Format de payload invalide pour UPLOAD");
+        return;
+    }
+    size_t filename_length = second_space - (first_space + 1);
+
     if (filename_length >= sizeof(filename)) {
         printf("ERROR: Nom de fichier trop long\n");
         send_message_to_client("ERROR: Nom de fichier trop long");
         return;
     }
-    strncpy(filename, payload, filename_length);
-    filename[filename_length] = '\0'; // Null-terminate le nom du fichier
-    // Vérification de sécurité sur le nom du fichier
+    strncpy(filename, first_space + 1, filename_length);
+    filename[filename_length] = '\0';
 
 
-    file_content++; // Avance pour pointer après l'espace
+    // Extraction du contenu du fichier (FILE CONTENT)
+    file_content = second_space + 1;
     size_t content_length = strlen(file_content);
 
-    // Vérification de la taille du fichier
+
+    
+    if (!file_content) {
+        printf("ERROR: Format de payload invalide pour UPLOAD\n");
+        send_message_to_client("ERROR: Format de payload invalide pour UPLOAD");
+        return;
+    }
     if (content_length > MAX_FILE_SIZE) {
         printf("ERROR: Fichier trop volumineux (%zu octets)\n", content_length);
         send_message_to_client("ERROR: Fichier trop volumineux");
         return;
     }
-    // Optionnel : Vérifier le type de contenu (si attendu comme texte ou binaire)
-    // Exemple : Rejet si fichier contient des caractères non-ASCII
     for (size_t i = 0; i < content_length; i++) {
         if (file_content[i] < 32 && file_content[i] != '\n' && file_content[i] != '\r' && file_content[i] != '\t') {
             printf("ERROR: Contenu du fichier non valide (caractère binaire détecté)\n");
+            send_message_to_client("ERROR: Contenu du fichier non valide");
+            return;
         }
     }
-    
+
+
     // Écriture du fichier sur le serveur
     char path[512];
-    snprintf(path, sizeof(path), "./files/test/%s", filename);
+    snprintf(path, sizeof(path), "./files/%s/%s", username, filename);
     FILE* file = fopen(path, "w");
     if (!file) {
         perror("ERROR: Impossible de créer le fichier sur le serveur");
@@ -657,6 +680,7 @@ int main() {
                     payload[sizeof(payload) - 1] = '\0';
                 }
                 printf("payload : %s\n", payload);
+                
                 handle_ecdh_command(payload);
             }
 

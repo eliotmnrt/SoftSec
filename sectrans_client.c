@@ -21,7 +21,7 @@ EVP_PKEY* localKey;
 EVP_PKEY* peerKey;
 unsigned char secret[32];
 bool is_logged = false;
-char * current_user = NULL;
+char current_user[256] = ""; 
 
 // Gérer les erreurs OpenSSL
 void handle_openssl_error() {
@@ -386,16 +386,15 @@ char* load_file(const char* filename, size_t* file_size) {
 }
 
 
-char* prepare_payload(const char* filename) {
+char* prepare_payload(const char *user, char* filename) {
     size_t file_size;
     char* file_content = load_file(filename, &file_size);
-    printf("\n\nfile %s\n", file_content);
     if (!file_content) {
         return NULL;
     }
 
     // Allouer suffisamment d'espace pour le payload
-    size_t payload_size = strlen(filename) + 1 + file_size + 2;
+    size_t payload_size = strlen(user) + 2 + strlen(filename) + 1 + file_size + 2;
     char* payload = (char*)malloc(payload_size);
     if (!payload) {
         perror("ERROR: Allocation mémoire échouée pour le payload");
@@ -404,7 +403,6 @@ char* prepare_payload(const char* filename) {
     }
 
     // Construire le payload : <filename> <file_content>
-    snprintf(payload, payload_size, "%s %s", filename, file_content);
     printf("\n\nfile %s\n", payload);
     free(file_content);
 
@@ -417,7 +415,7 @@ bool handle_upload_command(const char* command, char* filename, int port){
     unsigned char signature[256];
     unsigned int sig_len;
 
-    char * payload = prepare_payload(filename);
+    char * payload = prepare_payload(current_user, filename);
     if(!payload){
         printf("invalid payload");
         return false;
@@ -467,7 +465,8 @@ bool handle_upload_command(const char* command, char* filename, int port){
 
     // Envoi du message
     if (sndmsg(buffer, port) == 0) {
-        printf("Commande envoyée : %s\n", buffer);
+        // printf("Commande envoyée : %s\n", buffer);
+        printf("Commande envoyée avec succès \n");
         return true;
     } else {
         fprintf(stderr, "Erreur : échec de l'envoi de la commande.\n");
@@ -635,7 +634,7 @@ bool validate_command(const char *command, const char *arg1, const char *arg2){
 
         // Valide le format du chemin de fichier
         // les / ne sont pas autorisés pour pas changer de dossier
-        if (!validate_argument(arg1, "^[a-zA-Z0-9._-/]+$")) {
+        if (!validate_argument(arg1, "^[a-zA-Z0-9._/-]+$")) {
             printf("Erreur : Nom du fichier invalid.\n");
             return false;
         }
@@ -735,10 +734,6 @@ void handle_input(int serverPort) {
             bool uploaded= handle_upload_command("UPLOAD", arg1, serverPort);
             if (!uploaded) continue;
         } else if (strcmp(command, "-list") == 0 && !arg1) {
-            if (!current_user){
-                printf(" no user logged");
-                continue;
-            }
             send_command("LIST", current_user , serverPort);
         } else if (strcmp(command, "-down") == 0 && arg1) {
             send_command("DOWNLOAD", arg1, serverPort);
@@ -753,9 +748,10 @@ void handle_input(int serverPort) {
         printf("Waiting for Server response...\n");
         if (getmsg(buffer) == 0) {
             printf("Server response:\n%s\n", buffer);
-            if (strcmp(buffer, "SUCCESS: Login successful") == 0){
+            if (strcmp(buffer, "SUCCESS: Login successful") == 0 && strcmp(command, "-login") == 0){
                 is_logged = true;
-                current_user= arg1;
+                strncpy(current_user, arg1, sizeof(current_user) - 1);
+                current_user[sizeof(current_user) - 1] = '\0'; // Null-terminate
             }
         }
 
