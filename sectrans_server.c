@@ -397,9 +397,20 @@ void handle_upload_command(const char* payload) {
 }
 
 
-void handle_download_command(const char* filename) {
-    char filepath[512] = "./files/test/"; // Dossier contenant les fichiers
-    strcat(filepath, filename);      // Chemin complet du fichier
+void handle_download_command(const char* payload) {
+    char filename[256], username[256];
+    // Extract `username` and `filename` from the payload
+    if (sscanf(payload, "%s %s", username, filename) != 2) {
+        printf("ERROR: Payload format incorrect: %s\n", payload);
+        send_message_to_client("ERROR: Format de payload invalide");
+        return;
+    }
+
+    // Construct the file path with username directory
+    char filepath[512] = "./files/";
+    strcat(filepath, username);    // Append username
+    strcat(filepath, "/");         // Add trailing slash
+    strcat(filepath, filename);    // Append the filename
 
     // Vérification du nom du fichier (évite les attaques par parcours de répertoires)
     if (strstr(filename, "../") || strchr(filename, '/') || strchr(filename, '\\')) {
@@ -454,6 +465,7 @@ void handle_download_command(const char* filename) {
     // Envoyer le contenu au client (simulé ici avec un affichage)
     printf("SUCCESS: Fichier '%s' téléchargé (%ld octets)\n", filename, file_size);
     printf("Contenu du fichier :\n%s\n", file_content);
+    send_message_to_client(file_content);
 
     free(file_content);
 }
@@ -618,8 +630,6 @@ void handle_list_command(const char * username) {
 
 
 void handle_client_command(const char* command, const char* payload) {
-    printf("COMMAND %s", command);
-    printf("PAYLOAD %s ", payload);
     if (strcmp(command, "UPLOAD") == 0) {
         printf("Commande UPLOAD reçue. \n");
         // necessite que le client soit enregistré auparavant

@@ -276,11 +276,6 @@ char* encode_public_key(EVP_PKEY* pkey) {
         return NULL;
     }
 
-    // Encoder la clé publique en base64
-    // printf("clé pub");
-    // for (size_t i = 0; i < pubkey_der_len; i++) {
-    //     printf("%02X", pubkey_der[i]);
-    // }
     char* encoded_key = base64_encode(pubkey_der, pubkey_der_len);
     OPENSSL_free(pubkey_der);
     EC_KEY_free(ec_key);
@@ -387,8 +382,6 @@ char* load_file(const char* filename, size_t* file_size) {
 
 
 char* prepare_payload(const char *user, char* filename) {
-    printf("\nUSER %s\n", user);
-    printf("FILENAME %s\n", filename);
     size_t file_size;
     char* file_content = load_file(filename, &file_size);
     if (!file_content) {
@@ -406,7 +399,6 @@ char* prepare_payload(const char *user, char* filename) {
 
     // Construire le payload : <filename> <file_content>
     snprintf(payload, payload_size, "%s %s %s", user, filename, file_content);
-    printf("\n\nfile %s\n", payload);
     free(file_content);
 
     return payload;
@@ -417,7 +409,6 @@ bool handle_upload_command(const char* command, char* filename, int port){
 
     unsigned char signature[256];
     unsigned int sig_len;
-    printf("\nCURRENT USER DE TA MERE LA PUTE %s", current_user);
 
     char * payload = prepare_payload(current_user, filename);
     
@@ -455,16 +446,7 @@ bool handle_upload_command(const char* command, char* filename, int port){
     char* encoded_ciphertext = base64_encode(ciphertext, ciphertext_len);
     char* encoded_iv = base64_encode(iv, AES_BLOCK_SIZE);
 
-    // printf("iv : ");
-    // for (int i=0; i<16; i++){
-    //     printf("%d", encoded_iv[i]);
-    // }
-    // printf("\n");
-    // printf("Message : %s\n", payload);
-    // printf("Message chiffré : %s\n", ciphertext);
-    // printf("Message chiffré (base64) : %s\n", encoded_ciphertext);
-    // printf("IV (base64) : %s\n", encoded_iv);
-
+ 
     // Création du buffer pour l'envoi
     snprintf(buffer, MAX_BUFFER, "%s %s %d %s %s", command, encoded_signature, sig_len, encoded_iv, encoded_ciphertext);
 
@@ -736,14 +718,15 @@ void handle_input(int serverPort) {
             continue;
         }
         if (strcmp(command, "-up") == 0 && arg1) {
-            printf("ARG1 %s", arg1);
-
             bool uploaded= handle_upload_command("UPLOAD", arg1, serverPort);
             if (!uploaded) continue;
         } else if (strcmp(command, "-list") == 0 && !arg1) {
             send_command("LIST", current_user , serverPort);
         } else if (strcmp(command, "-down") == 0 && arg1) {
-            send_command("DOWNLOAD", arg1, serverPort);
+            char payload[256]; // Adjust size as necessary
+            snprintf(payload, sizeof(payload), "%s %s", current_user, arg1);
+            printf("payload for down: %s", payload);
+            send_command("DOWNLOAD", payload, serverPort);
         } else if (strcmp(command, "-login") != 0 && strcmp(command, "-register") != 0) {
             printf("Invalid command.\n");
             printf("Etes-vous log ? utilisez login ou register d'abord");
