@@ -330,7 +330,7 @@ void handle_upload_command(const char* payload) {
     size_t username_length = first_space - payload;
     strncpy(username, payload, username_length);
     username[username_length] = '\0';
-
+    printf("USERNAME: %s", username);
     
     // Extraction du nom de fichier FILENAME
     const char * second_space = strchr(first_space+1, ' ');
@@ -341,6 +341,7 @@ void handle_upload_command(const char* payload) {
     }
     size_t filename_length = second_space - (first_space + 1);
 
+
     if (filename_length >= sizeof(filename)) {
         printf("ERROR: Nom de fichier trop long\n");
         send_message_to_client("ERROR: Nom de fichier trop long");
@@ -348,6 +349,9 @@ void handle_upload_command(const char* payload) {
     }
     strncpy(filename, first_space + 1, filename_length);
     filename[filename_length] = '\0';
+
+    printf("FILENAME: %s\n", filename);
+
 
 
     // Extraction du contenu du fichier (FILE CONTENT)
@@ -374,6 +378,7 @@ void handle_upload_command(const char* payload) {
         }
     }
 
+    printf("file content: %s\n", file_content);
 
     // Écriture du fichier sur le serveur
     char path[512];
@@ -613,6 +618,8 @@ void handle_list_command(const char * username) {
 
 
 void handle_client_command(const char* command, const char* payload) {
+    printf("COMMAND %s", command);
+    printf("PAYLOAD %s ", payload);
     if (strcmp(command, "UPLOAD") == 0) {
         printf("Commande UPLOAD reçue. \n");
         // necessite que le client soit enregistré auparavant

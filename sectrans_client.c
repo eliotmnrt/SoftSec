@@ -387,6 +387,8 @@ char* load_file(const char* filename, size_t* file_size) {
 
 
 char* prepare_payload(const char *user, char* filename) {
+    printf("\nUSER %s\n", user);
+    printf("FILENAME %s\n", filename);
     size_t file_size;
     char* file_content = load_file(filename, &file_size);
     if (!file_content) {
@@ -403,6 +405,7 @@ char* prepare_payload(const char *user, char* filename) {
     }
 
     // Construire le payload : <filename> <file_content>
+    snprintf(payload, payload_size, "%s %s %s", user, filename, file_content);
     printf("\n\nfile %s\n", payload);
     free(file_content);
 
@@ -414,8 +417,10 @@ bool handle_upload_command(const char* command, char* filename, int port){
 
     unsigned char signature[256];
     unsigned int sig_len;
+    printf("\nCURRENT USER DE TA MERE LA PUTE %s", current_user);
 
     char * payload = prepare_payload(current_user, filename);
+    
     if(!payload){
         printf("invalid payload");
         return false;
@@ -731,6 +736,8 @@ void handle_input(int serverPort) {
             continue;
         }
         if (strcmp(command, "-up") == 0 && arg1) {
+            printf("ARG1 %s", arg1);
+
             bool uploaded= handle_upload_command("UPLOAD", arg1, serverPort);
             if (!uploaded) continue;
         } else if (strcmp(command, "-list") == 0 && !arg1) {
