@@ -277,10 +277,10 @@ char* encode_public_key(EVP_PKEY* pkey) {
     }
 
     // Encoder la clé publique en base64
-    printf("clé pub");
-    for (size_t i = 0; i < pubkey_der_len; i++) {
-        printf("%02X", pubkey_der[i]);
-    }
+    // printf("clé pub");
+    // for (size_t i = 0; i < pubkey_der_len; i++) {
+    //     printf("%02X", pubkey_der[i]);
+    // }
     char* encoded_key = base64_encode(pubkey_der, pubkey_der_len);
     OPENSSL_free(pubkey_der);
     EC_KEY_free(ec_key);
@@ -452,15 +452,15 @@ bool handle_upload_command(const char* command, char* filename, int port){
     char* encoded_ciphertext = base64_encode(ciphertext, ciphertext_len);
     char* encoded_iv = base64_encode(iv, AES_BLOCK_SIZE);
 
-    printf("iv : ");
-    for (int i=0; i<16; i++){
-        printf("%d", encoded_iv[i]);
-    }
-    printf("\n");
-    printf("Message : %s\n", payload);
-    printf("Message chiffré : %s\n", ciphertext);
-    printf("Message chiffré (base64) : %s\n", encoded_ciphertext);
-    printf("IV (base64) : %s\n", encoded_iv);
+    // printf("iv : ");
+    // for (int i=0; i<16; i++){
+    //     printf("%d", encoded_iv[i]);
+    // }
+    // printf("\n");
+    // printf("Message : %s\n", payload);
+    // printf("Message chiffré : %s\n", ciphertext);
+    // printf("Message chiffré (base64) : %s\n", encoded_ciphertext);
+    // printf("IV (base64) : %s\n", encoded_iv);
 
     // Création du buffer pour l'envoi
     snprintf(buffer, MAX_BUFFER, "%s %s %d %s %s", command, encoded_signature, sig_len, encoded_iv, encoded_ciphertext);
@@ -512,22 +512,23 @@ void send_command(const char* command, char* payload, int port) {
     char* encoded_ciphertext = base64_encode(ciphertext, ciphertext_len);
     char* encoded_iv = base64_encode(iv, AES_BLOCK_SIZE);
 
-    printf("iv : ");
-    for (int i=0; i<16; i++){
-        printf("%d", encoded_iv[i]);
-    }
-    printf("\n");
-    printf("Message : %s\n", payload);
-    printf("Message chiffré : %s\n", ciphertext);
-    printf("Message chiffré (base64) : %s\n", encoded_ciphertext);
-    printf("IV (base64) : %s\n", encoded_iv);
+    // printf("iv : ");
+    // for (int i=0; i<16; i++){
+    //     printf("%d", encoded_iv[i]);
+    // }
+    // printf("\n");
+    // printf("Message : %s\n", payload);
+    // printf("Message chiffré : %s\n", ciphertext);
+    // printf("Message chiffré (base64) : %s\n", encoded_ciphertext);
+    // printf("IV (base64) : %s\n", encoded_iv);
 
     // Création du buffer pour l'envoi
     snprintf(buffer, MAX_BUFFER, "%s %s %d %s %s", command, encoded_signature, sig_len, encoded_iv, encoded_ciphertext);
 
     // Envoi du message
     if (sndmsg(buffer, port) == 0) {
-        printf("Commande envoyée : %s\n", buffer);
+        // printf("Commande envoyée : %s\n", buffer);
+        printf("Commande envoyée avec succès\n");
     } else {
         fprintf(stderr, "Erreur : échec de l'envoi de la commande.\n");
     }
@@ -541,12 +542,12 @@ void handle_ecdh_command(const char* buffer){
         fprintf(stderr, "Erreur : Décodage Base64 échoué.\n");
         exit(1);
     }
-    printf("key size %d", decoded_len);
-    printf("Clé décodée (en hexadécimal) :\n");
-    for (size_t i = 0; i < decoded_len; i++) {
-        printf("%02X", decodedKey[i]);
-    }
-    printf("\n");
+    // printf("key size %d", decoded_len);
+    // printf("Clé décodée (en hexadécimal) :\n");
+    // for (size_t i = 0; i < decoded_len; i++) {
+    //     printf("%02X", decodedKey[i]);
+    // }
+    // printf("\n");
     peerKey = decode_peer_public_key(decodedKey, decoded_len);
     if (!peerKey) {
         printf("Erreur : Échec du traitement de la clé publique distante\n");
@@ -557,17 +558,17 @@ void handle_ecdh_command(const char* buffer){
     size_t secret_len = sizeof(secret);
     size_t derived_len = derive_shared_secret(localKey, peerKey, secret, secret_len);
 
-    fprintf(stderr, "Secret partagé calculé avec succès (%zu octets).\n", derived_len);
-    for (size_t i = 0; i < derived_len; i++) {
-        printf("%02X", secret[i]);
-    }
-    printf("\n\n\n");
+    // fprintf(stderr, "Secret partagé calculé avec succès (%zu octets).\n", derived_len);
+    // for (size_t i = 0; i < derived_len; i++) {
+    //     printf("%02X", secret[i]);
+    // }
+    // printf("\n\n\n");
 }
 
 void make_ecdh(){
     char bufferECDH[MAX_BUFFER];
     char *encodedPubKey = encode_public_key(localKey);
-    printf("\n\nkeyy %s\n", encodedPubKey);
+    // printf("\n\nkeyy %s\n", encodedPubKey);
     snprintf(bufferECDH, MAX_BUFFER, "ECDH %s", encodedPubKey);
     sndmsg(bufferECDH, 12345),
 
@@ -621,7 +622,25 @@ bool validate_command(const char *command, const char *arg1, const char *arg2){
 
         }
         return true;
-    } else if (strcmp(command, "-up") == 0 || strcmp(command, "-down") == 0) {
+    } else if (strcmp(command, "-up") == 0) {
+        // Vérifie qu'il y a un argument
+        if (!arg1) {
+            printf("Erreur : Nom du fichier manquant.\n");
+            return false;
+        }
+        if(arg2){
+            printf("invalid number of args");
+            return false;
+        }
+
+        // Valide le format du chemin de fichier
+        // les / ne sont pas autorisés pour pas changer de dossier
+        if (!validate_argument(arg1, "^[a-zA-Z0-9._-/]+$")) {
+            printf("Erreur : Nom du fichier invalid.\n");
+            return false;
+        }
+        return true;
+    } else if (strcmp(command, "-down") == 0) {
         // Vérifie qu'il y a un argument
         if (!arg1) {
             printf("Erreur : Nom du fichier manquant.\n");
@@ -639,7 +658,8 @@ bool validate_command(const char *command, const char *arg1, const char *arg2){
             return false;
         }
         return true;
-    } else if (strcmp(command, "-list")==0){
+        }
+    else if (strcmp(command, "-list")==0){
         if (arg1 || arg2) {
             printf("Erreur: No args for -list.\n");
             return false;
@@ -736,8 +756,6 @@ void handle_input(int serverPort) {
             if (strcmp(buffer, "SUCCESS: Login successful") == 0){
                 is_logged = true;
                 current_user= arg1;
-                printf("CURRENT LOGGED USER: %s", current_user);
-
             }
         }
 
