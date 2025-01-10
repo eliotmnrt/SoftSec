@@ -12,6 +12,7 @@
 #include <openssl/err.h>
 #include <openssl/aes.h>
 #include <openssl/rand.h>
+#include <regex.h>
 
 
 #define MAX_BUFFER 1024
@@ -580,7 +581,84 @@ void print_usage() {
     printf("  -register <user> <password>  Register a new user\n");
     printf("  -login <user> <password>     Login as an existing user\n");
 }
+bool validate_argument(const char *arg, const char* pattern){
+    regex_t regex;
+    int ret;
+    ret=regcomp(&regex, pattern, REG_EXTENDED);
+    if(ret){
+        fprintf(stderr, "Erreur lors de la compilation de la regex\n");
+        return false;
+    }
+    // Vérifier si l'arg correspond au pattern
+    ret = regexec(&regex, arg, 0, NULL, 0);
+    regfree(&regex);
+    return ret==0;
+}
 
+bool validate_command(const char *command, const char *arg1, const char *arg2){
+    const char * userPattern = "^[a-zA-Z0-9_]{3,20}$";
+    const char * mdpPattern = "^[a-zA-Z0-9@#$^&+=]{4,20}$";
+    if(strcmp(command,"-register")==0 || strcmp(command, "-login")==0){
+        //Vérifier si aucun des deux arguments n'est nul
+        if(!arg2 || !arg2){
+            printf("ERROR: Nom d'utilisateur ou mot de passe manquant.\n");
+            return false;
+        }
+        // pour user: chiffre et lettres entre 3 et 2O char autorisées
+        // pour mdp: chiffre et lettrer et quelque char spéciaux entre 5 et 2O autorisées
+        
+
+        if (!validate_argument(arg1, userPattern) || !validate_argument(arg2, mdpPattern)){
+            printf("ERROR: Format invalide pour le nom d'utilisateur ou le mot de passe.\n");
+            return false;
+
+        }
+        return true;
+    } else if (strcmp(command, "-up") == 0 || strcmp(command, "-down") == 0) {
+        // Vérifie qu'il y a un argument
+        if (!arg1) {
+            printf("Erreur : Nom du fichier manquant.\n");
+            return false;
+        }
+        if(arg2){
+            printf("invalid number of args");
+            return false;
+        }
+
+        // Valide le format du chemin de fichier
+        // les / ne sont pas autorisés pour pas changer de dossier
+        if (!validate_argument(arg1, "^[a-zA-Z0-9._-]+$") || (strstr(arg1, ".."))!=NULL) {
+            printf("Erreur : Nom du fichier invalid.\n");
+            return false;
+        }
+        return true;
+    } else if (strcmp(command, "-list")==0){
+        // Vérifie qu'il y a un argument
+        if (!arg1) {
+            printf("Erreur : Nom d'utilisateur manquant pour -list.\n");
+            return false;
+        }
+        if(arg2){
+            printf("invalid number of args");
+            return false;
+        }
+        // Valide le format du nom d'utilisateur
+        if (!validate_argument(arg1, userPattern)) {
+            printf("Erreur : Nom d'utilisateur invalide.\n");
+            return false;
+        }
+        return true;
+    } else if (strcmp(command, "-help")==0){
+        // Vérifie qu'il y a un argument
+        if (arg1 || arg2) {
+            printf("Erreur: No args for help.\n");
+            return false;
+        }
+        return true;
+        
+    }
+    
+}
 void handle_input(int serverPort) {
     char input[MAX_BUFFER];
     char buffer[MAX_BUFFER];
@@ -604,6 +682,13 @@ void handle_input(int serverPort) {
             printf("Invalid command. -help for usage \n ");
             continue;
         }
+        // Vérifier si la commande est valide:
+        if(!validate_command(command, arg1, arg2)){
+            printf("invalid command, -help for usage \n");
+            continue;
+        }
+
+        //Gestion des command
         if (strcmp(command, "-help") == 0){
             print_usage();
             continue;
@@ -655,11 +740,6 @@ void handle_input(int serverPort) {
 }
 
 int main(int argc, char *argv[]) {
-    // if (argc < 3) {
-    //     print_usage(argv[0]);
-    //     return 1;
-    // }
-
     //  Initialize OpenSSL
     OpenSSL_add_all_algorithms();
     ERR_load_crypto_strings();
